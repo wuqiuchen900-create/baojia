@@ -21,3 +21,4 @@ E:\xiangmu\baojia\BaoJiaCAD\bin\Debug\net48\System.Numerics.Vectors.dll
 E:\xiangmu\baojia\BaoJiaCAD\bin\Debug\net48\System.Runtime.CompilerServices.Unsafe.dll
 E:\xiangmu\baojia\BaoJiaCAD\bin\Debug\net48\XLParser.dll
 E:\xiangmu\baojia\BaoJiaCAD\bin\Debug\net48\System.ValueTuple.dll
+E:\xiangmu\baojia\BaoJiaCAD\obj\Debug\net48\BaoJiaCAD.sourcelink.json

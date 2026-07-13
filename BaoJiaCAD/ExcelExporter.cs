@@ -767,7 +767,7 @@ namespace BaoJiaCAD
                 // 都会被 旧 的 c1=="" 检查 错判为 非小计行 然后被丢.
                 // 误判备注行 (如 "本部分无小计" / "小计鉴定标准") 后果可控 — SUM() 自动忽略.
                 if (c2.Contains("小计")) subtotalRows.Add(row);
-                if (c2.Contains("合计")) totalRows.Add(row);
+                else if (c2.Contains("合计")) totalRows.Add(row);
             }
 
             if (totalRows.Count == 0)
@@ -860,6 +860,26 @@ namespace BaoJiaCAD
                 }
                 if (IsFloorItem(item.Name, config))
                 {
+                    // 🔧 瓷砖规格 blanking: 若用户在面板选了规格, 而当前 item 命中了某个 variant spec
+                    //    但不是用户选的, 把 D 列(=数量)清零, 让「=C*E」/「=C*G」自然归 0.
+                    //    - Match 列表使用 ALL-命中 (见 QuoteConfig.TileSpecOption.Match)
+                    //    - selectedSpec 为 null/空 → 走 fallback (全填), 不影响现有行为
+                    //    - itemSpec 为 null   → 走 fallback (item 没匹配任何 spec, 可能是别的 floor row, 不应 blank)
+                    string selectedSpec = null;
+                    if (config?.SelectedTileSpecs != null
+                        && config.SelectedTileSpecs.TryGetValue(room.RoomType ?? "", out var selSpecVal)
+                        && !string.IsNullOrEmpty(selSpecVal))
+                        selectedSpec = selSpecVal;
+
+                    string itemSpec = IdentifyTileSpecMatch(item.Name, config, room.RoomType);
+                    if (selectedSpec != null && itemSpec != null && !string.Equals(itemSpec, selectedSpec, StringComparison.Ordinal))
+                    {
+                        ws.Cell(item.Row, 3).Value = 0m;
+                        filled++;
+                        Debug($"    [规格失配 blank] 行{item.Row}: [{item.Name}] itemSpec={itemSpec} != selectedSpec={selectedSpec}, 已清零");
+                        continue;
+                    }
+
                     ws.Cell(item.Row, 3).Value = Math.Round(room.FloorArea, 2, MidpointRounding.AwayFromZero);
                     filled++;
                     Debug($"    填地面 行{item.Row}: [{item.Name}] 数量={room.FloorArea:F2}");
@@ -913,6 +933,37 @@ namespace BaoJiaCAD
         {
             if (string.IsNullOrEmpty(name)) return false;
             return GetWallKeywords(config).Any(k => name.Contains(k));
+        }
+
+        /// <summary>
+        /// 找出 item.Name 命中的 spec.Value. 用 ALL-命中: spec.Match 列表的所有子串都必须出现.
+        /// 不命中 任一 spec 返 null (Faller Safe — 让 IsFloorItem 老逻辑继续走).
+        /// </summary>
+        private string IdentifyTileSpecMatch(string itemName, QuoteConfig config, string roomType)
+        {
+            if (string.IsNullOrEmpty(itemName) || config == null) return null;
+            var dict = config.TemplateSettings?.TileSpecOptions;
+            if (dict == null) return null;
+            if (!dict.TryGetValue(roomType ?? "", out var specs) || specs == null) return null;
+
+            // 🔧 最先命中用 「总 key 长度 desc + keyword 数 desc」, 避免以后 config 顺序变化 ·
+            // blanket spec (如 ["正铺"]) 在前但不该胜出. 同一 item 上多个 spec 否则 all-hit 并列时, 最具体的先赢.
+            var ordered = specs
+                .Where(s => s?.Match != null && s.Match.Count > 0)
+                .OrderByDescending(s => s.Match.Sum(m => (m?.Length ?? 0)))
+                .ThenByDescending(s => s.Match.Count);
+
+            foreach (var spec in ordered)
+            {
+                bool allHit = true;
+                foreach (var m in spec.Match)
+                {
+                    if (string.IsNullOrEmpty(m)) continue;
+                    if (!itemName.Contains(m)) { allHit = false; break; }
+                }
+                if (allHit) return spec.Value ?? "";
+            }
+            return null;
         }
 
         // ====================================================================

@@ -31,6 +31,13 @@ namespace BaoJiaCAD
         public BathroomKitchenDefaults BathroomKitchenDefaults { get; set; } = new BathroomKitchenDefaults();
 
         /// <summary>
+        /// 本次报价运行时用户选的瓷砖规格 (roomType -> spec.Value). 由 Commands 从面板写入, ExcelExporter 读取.
+        /// 不会被 Save() (不持久化, 每次 BJ 重填).
+        /// </summary>
+        [JsonIgnore]
+        public Dictionary<string, string> SelectedTileSpecs { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
         /// 从 JSON 文件加载配置
         /// </summary>
         public static QuoteConfig Load(string path)
@@ -139,7 +146,22 @@ namespace BaoJiaCAD
                         { "外花园", "客餐厅" }
                     },
                     FloorItemKeywords = new List<string> { "地面保护", "铺地砖", "地砖", "地板", "正铺" },
-                    WallItemKeywords = new List<string> { "墙顶面基层加固", "墙面基层处理", "鸟巢腻子", "芬琳芬华", "五合一", "内墙乳胶漆" }
+                    WallItemKeywords = new List<string> { "墙顶面基层加固", "墙面基层处理", "鸟巢腻子", "芬琳芬华", "五合一", "内墙乳胶漆" },
+                    TileSpecOptions = new Dictionary<string, List<TileSpecOption>>
+                    {
+                        ["客餐厅"] = new List<TileSpecOption>
+                        {
+                            // 顺序无关, 因为 Match 用「全部命中」做精准过滤:
+                            //   sp300-800 要求「正铺」AND「300-800MM」都存在 → 与菱铺(300-800) 不歧义
+                            //   spDiamond 只要「菱铺」 → 单独命中
+                            new TileSpecOption { Label = "正铺 300-800MM (人工32)",   Value = "sp300-800",  Match = new List<string> { "正铺", "300-800MM" } },
+                            new TileSpecOption { Label = "正铺 600*1200MM (人工48)",  Value = "sp600-1200", Match = new List<string> { "正铺", "600*1200" } },
+                            new TileSpecOption { Label = "正铺 750*1500MM (人工71)",  Value = "sp750-1500", Match = new List<string> { "正铺", "750*1500" } },
+                            new TileSpecOption { Label = "正铺 800*1600MM (人工81)",  Value = "sp800-1600", Match = new List<string> { "正铺", "800*1600" } },
+                            new TileSpecOption { Label = "正铺 900*1800MM (人工91)",  Value = "sp900-1800", Match = new List<string> { "正铺", "900*1800" } },
+                            new TileSpecOption { Label = "菱铺 300-800MM (人工48)",   Value = "spDiamond",  Match = new List<string> { "菱铺" } }
+                        }
+                    }
                 }
             };
         }
@@ -224,5 +246,25 @@ namespace BaoJiaCAD
 
         /// <summary>填房间墙顶面面积的项目关键字</summary>
         public List<string> WallItemKeywords { get; set; } = new List<string>();
+
+        /// <summary>
+        /// 瓷砖规格选项 (按房间类型): 同时多个 tile variant 行 (e.g. 「客厅及餐厅正铺地砖 (300-800MM)」 / (600*1200) / (菱铺) 等).
+        /// UI: QuotePanel 对 ≥2 个 variant 的 roomType 显示规格下拉. 用户选一个 → 其余行 D 列清零, 只留匹配行生效.
+        /// 匹配: Match 是 *全部* 必须命中的子串列表, 用于精准区分同尺寸下「正铺」与「菱铺」之类歧义.
+        /// </summary>
+        public Dictionary<string, List<TileSpecOption>> TileSpecOptions { get; set; } = new Dictionary<string, List<TileSpecOption>>();
+    }
+
+    /// <summary>
+    /// 瓷砖规格选项: 一组与一组 Match 子串 (全部命中才算匹配).
+    /// </summary>
+    public class TileSpecOption
+    {
+        /// <summary>面板下拉显示标签 (e.g. "正铺 300-800MM (人工32)")</summary>
+        public string Label { get; set; }
+        /// <summary>唯一值 (e.g. "sp300-800"), 写回 SelectedTileSpecs</summary>
+        public string Value { get; set; }
+        /// <summary>item.Name 必须 *全部* 包含这些子串 才算命中此规格</summary>
+        public List<string> Match { get; set; } = new List<string>();
     }
 }

@@ -55,6 +55,16 @@ namespace BaoJiaCAD
                 // 面板防水参数回写到 config（覆盖 config.json 默认值，仅本次生效）
                 panel.ApplyWaterproofToConfig(config);
 
+                // 面板瓷砖规格回写到 config.SelectedTileSpecs (运行时, 不持久化)
+                //   - ExcelExporter.FillRoomData 读这个 dict + TileSpecOptions.Match 做 spec-blanking
+                config.SelectedTileSpecs = panel.GetTileSpecSelections();
+                if (config.SelectedTileSpecs.Count > 0)
+                {
+                    editor.WriteMessage($"\n[规格] 用户面板选 {config.SelectedTileSpecs.Count} 个类别:");
+                    foreach (var kv in config.SelectedTileSpecs)
+                        editor.WriteMessage($"\n[规格]   {kv.Key} -> {kv.Value}");
+                }
+
                 // 5. 循环识别每层
                 var allRooms = new List<Room>();
                 var confirmedBoundaries = new List<DetectedBoundary>();
@@ -296,29 +306,37 @@ namespace BaoJiaCAD
         {
             string dllDir = Path.GetDirectoryName(typeof(Commands).Assembly.Location);
             var ts = config?.TemplateSettings;
-            // 🔧 修复 #3: TemplateFolderPath 为空时使用 DLL 目录作为默认模板文件夹
+            // 修复 #3: TemplateFolderPath 为空时使用 DLL 目录作为默认模板文件夹
             string tplDir = (ts != null && !string.IsNullOrEmpty(ts.TemplateFolderPath))
                 ? ts.TemplateFolderPath
                 : dllDir;
 
-            // 1. 复式场景：优先 fushi
-            if (isMultiFloor && ts != null
+            // 0. 检测用户是否主动改了面板下拉 (overrideTemplate != ActiveTemplate 表示改过).
+            //    不区分会产生 1 个 regression: 复式 + 不动下拉 -> 旧行为默认 fushi, 新逻辑会无限选 dizhuan.
+            bool userChangedTemplate =
+                !string.IsNullOrEmpty(overrideTemplate)
+                && overrideTemplate != (ts?.ActiveTemplate ?? "");
+
+            // 1. 保留老行为: 用户未改下拉 + 复式 -> 默认 fushi
+            if (!userChangedTemplate && isMultiFloor
+                && ts != null
                 && ts.Templates != null
-                && ts.Templates.TryGetValue("fushi", out var fushiFile))
+                && ts.Templates.TryGetValue("fushi", out var fushiDefaultFile))
             {
-                string fp = Path.Combine(tplDir, fushiFile);
-                if (File.Exists(fp))
+                string fpDefault = Path.Combine(tplDir, fushiDefaultFile);
+                if (File.Exists(fpDefault))
                 {
-                    editor.WriteMessage($"\n[模板] 复式模式 -> 使用 {fushiFile} (含楼层分组)");
-                    return fp;
+                    editor.WriteMessage($"\n[模板] 复式默认 (面板未改) -> 使用 {fushiDefaultFile} (含楼层分组)");
+                    return fpDefault;
                 }
-                // 复式 + fushi 路径下找不到 → 醒目警告，避免静默退化到 dizhuan
+                // 文件缺失: 醒目 breadcrumb (旧行为保留), 不静默退化到 dizhuan
                 editor.WriteMessage(
-                    $"\n[模板] !! 复式期望 {fushiFile} 但路径 {tplDir} 不存在, " +
-                    $"fallback 到 ActiveTemplate={ts.ActiveTemplate}（可能不推荐复式，建议检查 {fushiFile}）");
+                    $"\n[模板] !! 复式期望 fushi 但路径 {tplDir} 不存在, " +
+                    $"fallback 到面板选择 ({ts.ActiveTemplate ?? "未配置"})");
             }
 
-            // 2. 按面板选择/ActiveTemplate 选模板
+            // 2. 优先级最高: 面板下拉选择 (overrideTemplate / ActiveTemplate) - 复式也允许 mudiban/zhubaojiao
+            //    用户口述: "复式 ≠ 必然 fushi" - 选什么走什么
             string activeTemplate = !string.IsNullOrEmpty(overrideTemplate) ? overrideTemplate : ts?.ActiveTemplate;
             if (ts != null
                 && ts.Templates != null
@@ -328,13 +346,36 @@ namespace BaoJiaCAD
                 string p = Path.Combine(tplDir, fileName);
                 if (File.Exists(p))
                 {
-                    editor.WriteMessage($"\n[模板] 单层模式 -> 使用 {activeTemplate} -> {fileName}");
+                    editor.WriteMessage($"\n[模板] 面板选择 {activeTemplate} -> 使用 {fileName}");
+                    if (isMultiFloor && activeTemplate != "fushi")
+                    {
+                        editor.WriteMessage(
+                            $"\n[模板] 注: {activeTemplate} 原型区非复式结构. " +
+                            $"ProcessRooms 按 Room.FloorLevel 自检测多楼 + ResolveTemplates 回退到无楼层前缀的原型. " +
+                            $"如有异常请选 fushi.");
+                    }
                     return p;
                 }
-                editor.WriteMessage($"\n[模板] !! 选择模板={activeTemplate} 但文件 {fileName} 不存在, 走 fallback");
+                editor.WriteMessage($"\n[模板] !! 面板选 {activeTemplate} 但文件 {fileName} 不存在, 走 fushi 兜底");
             }
 
-            // 3. fallback 老路径
+            // 3. 复式兜底 (面板选的文件丢失时, 用 fushi 救场 - 提供楼层适配性)
+            if (isMultiFloor && ts != null
+                && ts.Templates != null
+                && ts.Templates.TryGetValue("fushi", out var fushiFile))
+            {
+                string fpFallback = Path.Combine(tplDir, fushiFile);
+                if (File.Exists(fpFallback))
+                {
+                    editor.WriteMessage($"\n[模板] 复式兜底 -> 使用 {fushiFile}");
+                    return fpFallback;
+                }
+                editor.WriteMessage(
+                    $"\n[模板] !! 复式期望 {fushiFile} 但路径 {tplDir} 不存在, " +
+                    $"fallback 到 ActiveTemplate={ts?.ActiveTemplate}");
+            }
+
+            // 4. 终极 fallback 老 dllDir/template.xlsx
             string fallback = Path.Combine(dllDir, "template.xlsx");
             if (File.Exists(fallback))
             {

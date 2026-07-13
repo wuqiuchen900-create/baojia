@@ -31,6 +31,9 @@ namespace BaoJiaCAD
         private Button _btnStart;
         private Button _btnCancel;
 
+        // 🔧 瓷砖规格动态下拉: 仅当 config.TemplateSettings.TileSpecOptions[roomType].Count ≥ 2 才生成.
+        private readonly Dictionary<string, ComboBox> _tileSpecCombos = new Dictionary<string, ComboBox>();
+
         // ── 输出属性（调用方读取）──
         public string ProjectName => _txtProjectName.Text.Trim();
         public double WallHeight => (double)_numWallHeight.Value;
@@ -51,7 +54,84 @@ namespace BaoJiaCAD
         public QuotePanel(QuoteConfig config, string dwgName)
         {
             InitializeComponent();
+            BuildTileSpecSection(config);   // 🔧 根据配置动态生成规格下拉 (在 InitializeComponent 之后, 在 ApplyConfig 之前)
             ApplyConfig(config, dwgName);
+        }
+
+        /// <summary>
+        /// 动态生成瓷砖规格下拉 (仅 ≥2 variant 的 roomType 才显示).
+        /// - 嵌入位置: 从 InitializeComponent 算出的「_btnStart.Top - rowH*2」往上传交, 避免把按钮挤下去.
+        /// - 用 form.Controls.AddRange 一次性插入分隔符 + 若干 Label + ComboBox.
+        /// </summary>
+        private void BuildTileSpecSection(QuoteConfig config)
+        {
+            var specsDict = config?.TemplateSettings?.TileSpecOptions;
+            if (specsDict == null || specsDict.Count == 0) return;
+
+            // 只取 ≥2 variant 的类别
+            var entries = specsDict
+                .Where(kv => kv.Value != null && kv.Value.Count >= 2)
+                .ToList();
+            if (entries.Count == 0) return;
+
+            const int labelW = 100;
+            const int colW = 180;
+            int rowH = 32;
+            // 把 _btnStart/_btnCancel 向下推 pushUp px, 给瓷砖规格节腾位置 (插在门洞/窗洞 与按钮之间).
+            // 同时把窗体增高 pushUp, 避免底部按被切.
+            int rowsNeeded = (entries.Count + 1) / 2;
+            int pushUp = rowsNeeded * rowH + 22;
+            int originalBtnTop = _btnStart.Top;
+            int originalCancelTop = _btnCancel.Top;
+            _btnStart.Top = originalBtnTop + pushUp;
+            _btnCancel.Top = originalCancelTop + pushUp;
+            this.Size = new Size(this.Width, this.Height + pushUp);
+
+            int yStart = originalBtnTop;
+            int xCol1 = 20;
+            int xCol2 = 20 + labelW + 8 + colW + 30;
+            var sep = new Label
+            {
+                Text = "── 瓷砖规格 (按房间) ──",
+                Left = 20, Top = yStart,
+                Width = 380,
+                ForeColor = SystemColors.GrayText,
+                Font = new Font("Microsoft YaHei", 8F)
+            };
+            this.Controls.Add(sep);
+            yStart += 22;
+
+            var added = new List<Control>();
+            for (int i = 0; i < entries.Count; i++)
+            {
+                string roomType = entries[i].Key;
+            List<TileSpecOption> list = entries[i].Value;
+                bool leftCol = (i % 2 == 0);
+                int xLabel = leftCol ? xCol1 : xCol2;
+                int xCombo = xLabel + labelW + 8;
+                int y = yStart + (i / 2) * rowH;
+
+                var lbl = new Label
+                {
+                    Text = $"{roomType}：",
+                    Left = xLabel, Top = y, Width = labelW,
+                    TextAlign = ContentAlignment.MiddleRight
+                };
+                var cb = new ComboBox
+                {
+                    Left = xCombo, Top = y, Width = colW,
+                    DropDownStyle = ComboBoxStyle.DropDownList
+                };
+                foreach (var spec in list)
+                    cb.Items.Add(spec);
+                cb.DisplayMember = nameof(TileSpecOption.Label);
+                cb.SelectedIndex = 0;
+
+                _tileSpecCombos[roomType] = cb;
+                added.Add(lbl);
+                added.Add(cb);
+            }
+            this.Controls.AddRange(added.ToArray());
         }
 
         private void InitializeComponent()
@@ -291,6 +371,21 @@ namespace BaoJiaCAD
             d.BalconyWaterproofHeight = (double)_numBalconyWaterproof.Value;
             d.OutdoorGardenRollHeight = (double)_numGardenRoll.Value;
             d.OutdoorGardenNonRollHeight = (double)_numGardenNonRoll.Value;
+        }
+
+        /// <summary>
+        /// 从面板里抽用户选的瓷砖规格 (每 roomType -> spec.Value) 返回; 由 Commands 写进 config.SelectedTileSpecs.
+        /// 没出现的 roomType 不入 (代表用户没改该类别下拉, 走 fallback).
+        /// </summary>
+        public Dictionary<string, string> GetTileSpecSelections()
+        {
+            var map = new Dictionary<string, string>();
+            foreach (var kv in _tileSpecCombos)
+            {
+                if (kv.Value.SelectedItem is TileSpecOption opt && !string.IsNullOrEmpty(opt.Value))
+                    map[kv.Key] = opt.Value;
+            }
+            return map;
         }
     }
 }
