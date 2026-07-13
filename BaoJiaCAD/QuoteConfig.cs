@@ -99,6 +99,9 @@ namespace BaoJiaCAD
                     new RoomTypeMap { Keywords = new List<string> { "阳台" }, RoomType = "阳台" },
                     new RoomTypeMap { Keywords = new List<string> { "卫", "厕所", "洗手间" }, RoomType = "卫生间" },
                     new RoomTypeMap { Keywords = new List<string> { "厨" }, RoomType = "厨房" },
+                    // 🔧 主卧 RoomTypeMap 必须在 卧室 之前 — ClassifyRoom first-match-wins,
+                    //    若主卧 keyword 在「卧」后 则「主卧、衣帽间」模板 group 会被错配到 卧室.
+                    new RoomTypeMap { Keywords = new List<string> { "主卧", "主人房", "主人卧室" }, RoomType = "主卧" },
                     new RoomTypeMap { Keywords = new List<string> { "卧", "书房", "父母", "儿童", "小孩", "保姆", "衣帽间", "储物间", "茶室", "钢琴房", "老人房", "女儿房", "儿子房", "客房", "电竞房", "影音室", "健身房", "棋牌室", "麻将室", "酒窖", "红酒", "画室", "工作室", "佛堂", "桑拿", "KTV", "多功能室", "休闲厅", "收藏室", "台球室" }, RoomType = "卧室" }
                 },
                 QuoteItems = new List<QuoteItemConfig>
@@ -143,7 +146,11 @@ namespace BaoJiaCAD
                     RoomTypeFallbackMap = new Dictionary<string, string>
                     {
                         { "阳台", "客餐厅" },
-                        { "外花园", "客餐厅" }
+                        { "外花园", "客餐厅" },
+                        // 🔧 主卧 fallback 到 客餐厅: 有模板 没主卧 group 时 默认都走 客餐厅 prototype
+                        //   (eg dizhuan/mudiban 模板只有客餐厅 + 厨房 之类, 不会混主卧). 主床 / 主卫 错配会静默隐除.
+                        // 若未来 dizhuan 模板加上了 主卧/主卫 独立 group, 可以从 config.json 删除该行.
+                        { "主卧", "客餐厅" }
                     },
                     FloorItemKeywords = new List<string> { "地面保护", "铺地砖", "地砖", "地板", "正铺" },
                     WallItemKeywords = new List<string> { "墙顶面基层加固", "墙面基层处理", "鸟巢腻子", "芬琳芬华", "五合一", "内墙乳胶漆" },
@@ -266,5 +273,16 @@ namespace BaoJiaCAD
         public string Value { get; set; }
         /// <summary>item.Name 必须 *全部* 包含这些子串 才算命中此规格</summary>
         public List<string> Match { get; set; } = new List<string>();
+        /// <summary>面板启动默认 选中此项 (首个 isDefault=true 的优先; 都无 则 index=0).</summary>
+        [JsonProperty("isDefault", NullValueHandling = NullValueHandling.Ignore, DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool IsDefault { get; set; } = false;
+
+        /// <summary>单规格模板 override: 选中此规格后, 该 row 的 C5(材质) 单价 将被覆写为此值. null = 不覆写 (保留模板原值).</summary>
+        [JsonProperty("materialPrice", NullValueHandling = NullValueHandling.Ignore)]
+        public double? MaterialPrice { get; set; } = null;
+
+        /// <summary>单规格模板 override: 选中此规格后, 该 row 的 C7(人工) 单价 将被覆写为此值. null = 不覆写 (保留模板原值).</summary>
+        [JsonProperty("laborPrice", NullValueHandling = NullValueHandling.Ignore)]
+        public double? LaborPrice { get; set; } = null;
     }
 }

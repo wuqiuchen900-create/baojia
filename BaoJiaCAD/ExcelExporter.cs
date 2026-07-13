@@ -168,6 +168,16 @@ namespace BaoJiaCAD
             @"<definedNames>\s*</definedNames>",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // 🔧 v5: 「可能被当是贴装在地面上的行」识别关键词 — 原名需含 这些 「之一」 才走 floorItemCount==0 fallback.
+        //   故意 「地板」「强化地板」「木地板」均 不 列入 — 避免mudiban 床屋被v4 误改为地砖+套价.
+        private static readonly string[] TileishKeywords = new[] {
+            "\u5730\u7816",  // 地砖
+            "\u6b63\u94fa",  // 正铺
+            "\u6b63\u8d34",  // 正贴
+            "\u83f1\u94fa",  // 菱铺
+            "\u83f1\u8d34",  // 菱贴
+        };
+
         private string PreprocessInvalidDefinedNames(string srcPath)
         {
             if (!File.Exists(srcPath)) return srcPath;
@@ -830,8 +840,77 @@ namespace BaoJiaCAD
                 Debug($"    [! 警告] 房间 [{room.Name}] IsWaterproofedRoll={(room.IsWaterproofedRoll.Value ? "卷材" : "非卷材")}，OutdoorGardenFormulas 为空，按地面/墙面默认填充");
             }
             bool hasIndoor = room.ItemFormulas != null && room.ItemFormulas.Count > 0;
+            // 🔧 双模规格化: 同一套引擎既处理 zhubaojiao 多 variant 行 (blank-on-mismatch),
+            //    也处理 dizhuan 单行通用模板 (override col5/col7 价格).
+            //   floorItemCount 决定是「单规格模板」还是「多规格模板」:
+            //     ≤1 → 单规格 (override C5/C7/C9; 不 blank C3)
+            //     ≥2 → 多规格 (保留原 blank-on-mismatch 行为)
+            // 🔧 v4 修正: 仅统计真正能被 某个 TileSpec 评中 的 row (itemSpec != null),
+            //   避免 强化地板 / 成品保护 这类 走 FloorKeywords (「地板」「成品保护」)但
+            //   本身不属 tile谱系 的行被 误计数  → 出现 dizhuan 模板 只有 1 实际 tile
+            //   行却 被算成 多规格 的事故
+            int floorItemCount = group.Items.Count(i =>
+                IsFloorItem(i.Name, config) && IdentifyTileSpecMatch(i.Name, config, room.RoomType) != null);
+            string selectedSpecCached = null;
+            if (config?.SelectedTileSpecs != null
+                && config.SelectedTileSpecs.TryGetValue(room.RoomType ?? "", out var selSpecCachedVal)
+                && !string.IsNullOrEmpty(selSpecCachedVal))
+                selectedSpecCached = selSpecCachedVal;
             foreach (var item in group.Items)
             {
+                // 🔧 PHASE A: 单规格模板 price override (C5/C7 + C9 备注 marker)
+                //   走 在最前 以保证即使 row 同时命中 ItemFormulas / OutdoorGardenFormulas (Phase B/C)
+                //   也把材质/人工单价先覆写为 selectedSpec — ItemFormulas 只动 C3 与之处突。
+                //   double? + HasValue → 未配价格不动模板, 0 表达 「材质免费」 语义保留.
+                //   C9 marker 重复跑多规格时会被正则清除历史后从唯一个 marker 重写.
+                //   🔧 v4 另加防御: isExactSpecRow 免 强化地板 / 成品保护 被颛 误跳 进 override
+                //     (他们是 IsFloorItem=true 但 itemSpec=null, 不是 谱）；fall back 则是
+                //     floorItemCount==0 即全组 谱 都没 能评中—保持 原始 「通用单行模板」 行为.
+                bool isExactSpecRow = IdentifyTileSpecMatch(item.Name, config, room.RoomType) != null;
+                if (floorItemCount <= 1 && IsFloorItem(item.Name, config) && selectedSpecCached != null
+                    && config?.TemplateSettings?.TileSpecOptions != null
+                    && config.TemplateSettings.TileSpecOptions.TryGetValue(room.RoomType ?? "", out var specList)
+                    && specList != null
+                    && (isExactSpecRow || (floorItemCount == 0 && IsTileishName(item.Name))))
+                {
+                    var opt = specList.FirstOrDefault(s => string.Equals(s.Value, selectedSpecCached, StringComparison.Ordinal));
+                    if (opt != null)
+                    {
+                        if (opt.MaterialPrice.HasValue)
+                        {
+                            ws.Cell(item.Row, 5).Value = opt.MaterialPrice.Value;
+                            Debug($"    [单规格 override C5] 行{item.Row}: [{item.Name}] material={opt.MaterialPrice.Value:F2} (规格={selectedSpecCached})");
+                        }
+                        if (opt.LaborPrice.HasValue)
+                        {
+                            ws.Cell(item.Row, 7).Value = opt.LaborPrice.Value;
+                            Debug($"    [单规格 override C7] 行{item.Row}: [{item.Name}] labor={opt.LaborPrice.Value:F2} (规格={selectedSpecCached})");
+                        }
+                        if (opt.MaterialPrice.HasValue || opt.LaborPrice.HasValue)
+                        {
+                            // 🔧 C2 重写：选中规格后, 让 row 名 明确呈现所选规格 (dizhuan 类单行模板中 row 原本只写「铺地砖」无规格信息)
+                            //   若模板原有的 row 名 已与 BuildSpecItemName 不同, 覆写. zhubaojiao 多规格模板行名 本身已对齐
+                            //   spec.Lab 里的 size 部分 → 不会触发覆写 (避免命名被改).
+                            string c2New = BuildSpecItemName(opt);
+                            if (!string.IsNullOrEmpty(c2New)
+                                && !string.Equals(item.Name ?? string.Empty, c2New, StringComparison.Ordinal))
+                            {
+                                ws.Cell(item.Row, 2).Value = c2New;
+                                Debug($"    [单规格 rewrite C2] 行{item.Row}: [{item.Name}] -> [{c2New}] (规格={selectedSpecCached})");
+                            }
+                            // 清掉历史 marker（防同一行跨多次跑多规格造成 stack），只留最新一个
+                            string rawDesc = CellString(ws.Cell(item.Row, 9)) ?? string.Empty;
+                            string desc = Regex.Replace(rawDesc, @"\n?\u3010\u5df2\u5e94\u7528\u89c4\u683c:.*?\u3011", string.Empty, RegexOptions.Singleline).TrimEnd('\n', '\r');
+                            string marker = "\u3010\u5df2\u5e94\u7528\u89c4\u683c: " + (opt.Label ?? selectedSpecCached) + "\u3011";
+                            ws.Cell(item.Row, 9).Value = (desc.Length == 0 ? marker : desc + "\n" + marker);
+                        }
+                    }
+                    else
+                    {
+                        Debug($"    [单规格 跳过 override] 行{item.Row}: selectedSpec={selectedSpecCached} 但 config 里没找到, 模板价格保留");
+                    }
+                }
+
                 if (hasOutdoor)
                 {
                     string key = FindFormulaKey(room.OutdoorGardenFormulas, item.Name);
@@ -860,23 +939,32 @@ namespace BaoJiaCAD
                 }
                 if (IsFloorItem(item.Name, config))
                 {
-                    // 🔧 瓷砖规格 blanking: 若用户在面板选了规格, 而当前 item 命中了某个 variant spec
-                    //    但不是用户选的, 把 D 列(=数量)清零, 让「=C*E」/「=C*G」自然归 0.
-                    //    - Match 列表使用 ALL-命中 (见 QuoteConfig.TileSpecOption.Match)
-                    //    - selectedSpec 为 null/空 → 走 fallback (全填), 不影响现有行为
-                    //    - itemSpec 为 null   → 走 fallback (item 没匹配任何 spec, 可能是别的 floor row, 不应 blank)
-                    string selectedSpec = null;
-                    if (config?.SelectedTileSpecs != null
-                        && config.SelectedTileSpecs.TryGetValue(room.RoomType ?? "", out var selSpecVal)
-                        && !string.IsNullOrEmpty(selSpecVal))
-                        selectedSpec = selSpecVal;
-
+                    // 🔧 双模规格化: 同一套引擎既能处理 zhubaojiao 多 variant 行 (blank-on-mismatch),
+                    //    也能处理 dizhuan 单行通用模板 (override col5/col7 价格, 在 PHASE A 已跑).
+                    //    判定仅依赖 floorItemCount (上面已算好):
+                    //      ≤1 → 单规格 (PHASE A override 已跑, 这里只填 C3)
+                    //      ≥2 → 多规格 (保留原 blank-on-mismatch 行为)
+                    //    selectedSpec / itemSpec 字段定义沿用 TileSpecOption.Value.
                     string itemSpec = IdentifyTileSpecMatch(item.Name, config, room.RoomType);
-                    if (selectedSpec != null && itemSpec != null && !string.Equals(itemSpec, selectedSpec, StringComparison.Ordinal))
+
+                    if (floorItemCount <= 1)
+                    {
+                        // ── 单规格模板 (dizhuan 等只有 1 行「铺地砖」每分组的模板) ──
+                        // C5/C7/C9 已在 PHASE A 处理 (顶位跑保证不被 ItemFormulas 短路).
+                        // 这里只为 C3 填 FloorArea. 若 ItemFormulas 已填 (Phase C 先 续)
+                        // 也不会被 覆盖,因为 Phase C 是在该块之前跑且全程已 Phase A 生效.
+                        ws.Cell(item.Row, 3).Value = Math.Round(room.FloorArea, 2, MidpointRounding.AwayFromZero);
+                        filled++;
+                        Debug($"    [填地面 单规格] 行{item.Row}: [{item.Name}] 数量={room.FloorArea:F2} (规格={selectedSpecCached ?? "<未选>"})");
+                        continue;
+                    }
+
+                    // ── 多规格模板 (zhubaojiao 等多个 variant 行) ── 维持原 blank-on-mismatch 行为
+                    if (selectedSpecCached != null && itemSpec != null && !string.Equals(itemSpec, selectedSpecCached, StringComparison.Ordinal))
                     {
                         ws.Cell(item.Row, 3).Value = 0m;
                         filled++;
-                        Debug($"    [规格失配 blank] 行{item.Row}: [{item.Name}] itemSpec={itemSpec} != selectedSpec={selectedSpec}, 已清零");
+                        Debug($"    [规格失配 blank] 行{item.Row}: [{item.Name}] itemSpec={itemSpec} != selectedSpec={selectedSpecCached}, 已清零");
                         continue;
                     }
 
@@ -927,6 +1015,56 @@ namespace BaoJiaCAD
         {
             if (string.IsNullOrEmpty(name)) return false;
             return GetFloorKeywords(config).Any(k => name.Contains(k));
+        }
+
+        /// <summary>
+        /// 「原 row 名是否看起来像是 铺地砖的候选」 — 只需包含 TileishKeywords 中任一即可.
+        /// 是 v5 PHASE A gate 中的 「floorItemCount==0 fallback」 唯一准入依据。mudiban 的 「地面找平」「自流平」「成品保护」这类不含。
+        /// </summary>
+        private static bool IsTileishName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            foreach (var k in TileishKeywords)
+                if (name.Contains(k)) return true;
+            return false;
+        }
+
+
+        /// <summary>
+        /// 根据 spec.Match 构造规格对应的 C2 项目名称 — 在单规格模板 (dizhuan) PHASE A 用.
+        ///   - Match 含「正铺」 → prefix "正铺地砖"; 含「正贴」 → "正贴地砖".
+        ///   - 含「菱铺」/「菱贴」 → 仅返回 prefix (菱补 销大小子串 — diamond 实际可不报尺寸).
+        ///   - 其他 → "铺地砖".
+        ///   - size 从 Match 里第一个数字型子串提取; 已带 "MM" 不重复加. 菱补 return prefix only.
+        ///   - 例: ["正铺","750*1500"]  → "正铺地砖（750*1500MM）"
+        ///   - 例: ["菱铺"]           → "菱铺地砖"
+        /// </summary>
+        private static string BuildSpecItemName(TileSpecOption opt)
+        {
+            if (opt?.Match == null || opt.Match.Count == 0) return null;
+            string prefix = "铺地砖";
+            string size = null;
+            foreach (var m in opt.Match)
+            {
+                if (string.IsNullOrEmpty(m)) continue;
+                if (m.Contains("\u83f1\u94fa")) prefix = "\u83f1\u94fa\u5730\u7816";        // 菱铺
+                else if (m.Contains("\u83f1\u8d34")) prefix = "\u83f1\u8d34\u5730\u7816";    // 菱贴
+                else if (m.Contains("\u6b63\u94fa")) prefix = "\u6b63\u94fa\u5730\u7816";    // 正铺
+                else if (m.Contains("\u6b63\u8d34")) prefix = "\u6b63\u8d34\u5730\u7816";    // 正贴
+                else if (m.Contains("\u94fa\u5730\u7816") || m == "\u5730\u7816" || m == "\u5730\u677f")
+                    prefix = "\u94fa\u5730\u7816";                                            // 铺地砖 / 地砖 / 地板
+                else size = m;                                                                // 首个数字型子串视为 size
+            }
+            // 菱补 spec Match 只有 「菱铺/菱贴」 关键子, 不带 size. fallback 从 opt.Label 正则抓取 "数字尺寸MM".
+            // 避免选中菱铺后 row 丢失 size 提示 (如 300-800MM).
+            if (prefix.StartsWith("\u83f1") && string.IsNullOrEmpty(size) && !string.IsNullOrEmpty(opt.Label))
+            {
+                var lblMatch = Regex.Match(opt.Label, "([0-9]+(?:[\\-\\*][0-9]+)?MM)");
+                if (lblMatch.Success) size = lblMatch.Groups[1].Value;
+            }
+            if (string.IsNullOrEmpty(size)) return prefix;
+            string sizeWithUnit = size.EndsWith("MM") ? size : size + "MM";
+            return prefix + "\uff08" + sizeWithUnit + "\uff09";
         }
 
         private bool IsWallItem(string name, QuoteConfig config)

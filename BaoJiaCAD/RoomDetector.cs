@@ -19,13 +19,29 @@ namespace BaoJiaCAD
     }
 
     /// <summary>
+    /// 一个被跳过的 CAD 文字记录（含坐标+原因），便于命令列提醒 + 弹窗展示 + 写 trace
+    /// </summary>
+    public class SkippedTextInfo
+    {
+        /// <summary>原始文字内容</summary>
+        public string Text { get; set; }
+        /// <summary>文字插入点 X (mm) — 便于在 CAD 里 ZOOM 过去定位</summary>
+        public double X { get; set; }
+        /// <summary>文字插入点 Y (mm)</summary>
+        public double Y { get; set; }
+        /// <summary>跳过原因: "无 RoomTypeMaps Keywords" / "墙线未闭合" / "空白文字"</summary>
+        public string Reason { get; set; }
+    }
+
+    /// <summary>
     /// 一次 DetectRooms 的完整结果（含诊断信息）
     /// </summary>
     public class DetectionResult
     {
         public List<Room> Rooms { get; set; } = new List<Room>();
         public List<DetectedBoundary> NewBoundaries { get; set; } = new List<DetectedBoundary>();
-        public List<string> SkippedTexts { get; set; } = new List<string>();
+        // 🔧 升级: List<string> → List<SkippedTextInfo> (含坐标+原因) 便于弹出提醒
+        public List<SkippedTextInfo> SkippedTexts { get; set; } = new List<SkippedTextInfo>();
         public List<string> BoundaryWarnings { get; set; } = new List<string>();
         public List<string> Warnings { get; set; } = new List<string>();
     }
@@ -74,9 +90,10 @@ namespace BaoJiaCAD
                 foreach (var ent in textEntities)
                 {
                     string text = GetTextContent(ent);
+                    var pos = GetTextPosition(ent);  // 🔧 升级: 把坐标也带上 (供 ZOOM 用)
                     if (string.IsNullOrWhiteSpace(text))
                     {
-                        result.SkippedTexts.Add("(空白文字)");
+                        result.SkippedTexts.Add(new SkippedTextInfo { Text = "(空白文字)", X = pos.X, Y = pos.Y, Reason = "空白" });
                         continue;
                     }
 
@@ -84,7 +101,7 @@ namespace BaoJiaCAD
                     if (string.IsNullOrEmpty(roomType))
                     {
                         // 🔧 修复 #5: 未匹配关键词时跳过并给出警告，方便用户扩充 Keywords
-                        result.SkippedTexts.Add(text);
+                        result.SkippedTexts.Add(new SkippedTextInfo { Text = text, X = pos.X, Y = pos.Y, Reason = "无 RoomTypeMaps Keywords" });
                         result.Warnings.Add($"【{text}】未匹配任何房间类型关键词，已跳过。如需识别，请在 config.json 的 RoomTypeMaps 中扩充 Keywords。");
                         continue;
                     }
@@ -93,7 +110,8 @@ namespace BaoJiaCAD
                     Polyline boundary = BoundaryHelper.TraceBoundary(editor, seedPoint);
                     if (boundary == null)
                     {
-                        result.SkippedTexts.Add($"【{text}】墙线未闭合");
+                        result.SkippedTexts.Add(new SkippedTextInfo { Text = text, X = pos.X, Y = pos.Y, Reason = "墙线未闭合 (BO 无法追踪到闭合多段线; 多段线/曲线不能闭合时常出现)" });
+                        result.Warnings.Add($"【{text}】墙线未闭合 (BO 追踪失败)，已跳过。");
                         continue;
                     }
 
@@ -162,6 +180,15 @@ namespace BaoJiaCAD
             if (ent is DBText dbText) return dbText.Position;
             if (ent is MText mText) return mText.Location;
             return Point3d.Origin;
+        }
+
+        /// <summary>
+        /// 🔧 升级: 拿文字插入点 (X,Y) 返回 double 元组 — 给 SkippedTextInfo 用, 便于命令列 + 弹窗显示 "位置 X=…, Y=…" 方便 ZOOM 过去。
+        /// </summary>
+        private (double X, double Y) GetTextPosition(Entity ent)
+        {
+            var pt = GetTextPoint(ent);
+            return (pt.X, pt.Y);
         }
 
         private Point3d GetCentroid(Polyline pline)

@@ -1,0 +1,36 @@
+=== MUBAN_clean_dizhuan (muban_clean/dizhuan.xlsx) ===
+  size=91467 md5=d2741d4c1d
+  rows 8-80 C2:
+    r16: '客厅及餐厅正铺地砖（600*1200MM）'
+    r27: '铺地砖（正贴）'
+    r36: '铺地砖（正贴）'
+    r47: '铺地砖（正贴）'
+    r56: '铺地砖（正贴）'
+    r67: '铺地砖（正贴）'
+    r77: '铺地砖（正贴）'
+=== MUBAN_clean_zhubaojiao (muban_clean/zhubaojiao.xlsx) ===
+  size=114594 md5=db6190b9aa
+  rows 8-80 C2:
+    r58: '客厅及餐厅正铺地砖（300-800MM）'
+    r59: '客厅及餐厅正铺地砖（800*1600MM）'
+    r60: '客厅及餐厅正铺地砖（750*1500MM）'
+    r61: '客厅及餐厅正铺地砖（900*1800MM）'
+    r62: '客厅及餐厅正铺地砖（600*1200MM）'
+    r63: '客厅及餐厅菱铺地砖（300-800MM）'
+=== BIN_dizhuan (BaoJiaCAD/bin/Debug/net48/dizhuan.xlsx) ===
+  size=25153 md5=33eaffddc6
+  rows 8-80 C2:
+    r16: '客厅及餐厅正铺地砖（600*1200MM）'
+    r27: '铺地砖（正贴）'
+    r36: '铺地砖（正贴）'
+    r47: '铺地砖（正贴）'
+    r56: '铺地砖（正贴）'
+    r67: '铺地砖（正贴）'
+    r77: '铺地砖（正贴）'
+
+=== config.json (bin) digest ===
+  ActiveTemplate='dizhuan'
+  TemplateFolderPath='E:\\xiangmu\\baojia\\muban_clean\\'
+  CustomerTemplates keys: ['dizhuan', 'mudiban', 'fushi', 'zhubaojiao']
+  TileSpecOptions 客**餐**厅 count: 0
+    客**餐**厅 values: []

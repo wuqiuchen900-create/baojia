@@ -57,6 +57,14 @@
     },
     {
       "Keywords": [
+        "主卧",
+        "主人房",
+        "主人卧室"
+      ],
+      "RoomType": "主卧"
+    },
+    {
+      "Keywords": [
         "卧",
         "书房",
         "父母",
@@ -113,7 +121,8 @@
     },
     "RoomTypeFallbackMap": {
       "阳台": "客餐厅",
-      "外花园": "客餐厅"
+      "外花园": "客餐厅",
+      "主卧": "客餐厅"
     },
     "FloorItemKeywords": [
       "地面保护",
@@ -138,51 +147,188 @@
     "TileSpecOptions": {
       "客餐厅": [
         {
-          "label": "正铺 300-800MM (人工32)",
-          "value": "sp300-800",
-          "match": [
-            "正铺",
-            "300-800MM"
-          ]
-        },
-        {
-          "label": "正铺 600*1200MM (人工48)",
-          "value": "sp600-1200",
-          "match": [
-            "正铺",
-            "600*1200"
-          ]
-        },
-        {
           "label": "正铺 750*1500MM (人工71)",
           "value": "sp750-1500",
           "match": [
             "正铺",
             "750*1500"
-          ]
+          ],
+          "isDefault": true,
+          "materialPrice": 28.0,
+          "laborPrice": 71.0
+        },
+        {
+          "label": "正铺 300-800MM (人工32)",
+          "value": "sp300-800-LR",
+          "match": [
+            "正铺",
+            "300-800MM"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 32.0
+        },
+        {
+          "label": "正铺 600*1200MM (人工48)",
+          "value": "sp600-1200-LR",
+          "match": [
+            "正铺",
+            "600*1200"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
         },
         {
           "label": "正铺 800*1600MM (人工81)",
-          "value": "sp800-1600",
+          "value": "sp800-1600-LR",
           "match": [
             "正铺",
             "800*1600"
-          ]
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 81.0
         },
         {
           "label": "正铺 900*1800MM (人工91)",
-          "value": "sp900-1800",
+          "value": "sp900-1800-LR",
           "match": [
             "正铺",
             "900*1800"
-          ]
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 91.0
         },
         {
           "label": "菱铺 300-800MM (人工48)",
-          "value": "spDiamond",
+          "value": "spDiamond-LR",
           "match": [
             "菱铺"
-          ]
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        }
+      ],
+      "主卧": [
+        {
+          "label": "正铺 750*1500MM (人工71)",
+          "value": "sp750-1500-MBR",
+          "match": [
+            "正铺",
+            "750*1500"
+          ],
+          "isDefault": true,
+          "materialPrice": 28.0,
+          "laborPrice": 71.0
+        },
+        {
+          "label": "正铺 300-800MM (人工32)",
+          "value": "sp300-800-MBR",
+          "match": [
+            "正铺",
+            "300-800MM"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 32.0
+        },
+        {
+          "label": "正铺 600*1200MM (人工48)",
+          "value": "sp600-1200-MBR",
+          "match": [
+            "正铺",
+            "600*1200"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        },
+        {
+          "label": "正铺 800*1600MM (人工81)",
+          "value": "sp800-1600-MBR",
+          "match": [
+            "正铺",
+            "800*1600"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 81.0
+        },
+        {
+          "label": "正铺 900*1800MM (人工91)",
+          "value": "sp900-1800-MBR",
+          "match": [
+            "正铺",
+            "900*1800"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 91.0
+        },
+        {
+          "label": "菱铺 300-800MM (人工48)",
+          "value": "spDiamond-MBR",
+          "match": [
+            "菱铺"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        }
+      ],
+      "卧室": [
+        {
+          "label": "正铺 300-800MM (人工32)",
+          "value": "sp300-800-BR",
+          "match": [
+            "正铺",
+            "300-800MM"
+          ],
+          "isDefault": true,
+          "materialPrice": 28.0,
+          "laborPrice": 32.0
+        },
+        {
+          "label": "正铺 600*1200MM (人工48)",
+          "value": "sp600-1200-BR",
+          "match": [
+            "正铺",
+            "600*1200"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        },
+        {
+          "label": "正铺 750*1500MM (人工71)",
+          "value": "sp750-1500-BR",
+          "match": [
+            "正铺",
+            "750*1500"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 71.0
+        },
+        {
+          "label": "正铺 800*1600MM (人工81)",
+          "value": "sp800-1600-BR",
+          "match": [
+            "正铺",
+            "800*1600"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 81.0
+        },
+        {
+          "label": "正铺 900*1800MM (人工91)",
+          "value": "sp900-1800-BR",
+          "match": [
+            "正铺",
+            "900*1800"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 91.0
+        },
+        {
+          "label": "菱铺 300-800MM (人工48)",
+          "value": "spDiamond-BR",
+          "match": [
+            "菱铺"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
         }
       ],
       "厨房": [
@@ -192,18 +338,123 @@
           "match": [
             "正贴",
             "300-800MM"
-          ]
+          ],
+          "isDefault": true,
+          "materialPrice": 28.0,
+          "laborPrice": 32.0
+        },
+        {
+          "label": "正贴 600*1200MM (人工48)",
+          "value": "sp600-1200-K",
+          "match": [
+            "正贴",
+            "600*1200"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        },
+        {
+          "label": "正贴 750*1500MM (人工71)",
+          "value": "sp750-1500-K",
+          "match": [
+            "正贴",
+            "750*1500"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 71.0
+        },
+        {
+          "label": "正贴 800*1600MM (人工81)",
+          "value": "sp800-1600-K",
+          "match": [
+            "正贴",
+            "800*1600"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 81.0
+        },
+        {
+          "label": "正贴 900*1800MM (人工91)",
+          "value": "sp900-1800-K",
+          "match": [
+            "正贴",
+            "900*1800"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 91.0
         },
         {
           "label": "菱贴 300-800MM (人工48)",
           "value": "spDiamond-K",
           "match": [
             "菱贴"
-          ]
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
         }
       ],
-      "公卫": [],
-      "主卫": []
+      "卫生间": [
+        {
+          "label": "正贴 300-800MM (人工32)",
+          "value": "sp300-800-G",
+          "match": [
+            "正贴",
+            "300-800MM"
+          ],
+          "isDefault": true,
+          "materialPrice": 28.0,
+          "laborPrice": 32.0
+        },
+        {
+          "label": "正贴 600*1200MM (人工48)",
+          "value": "sp600-1200-G",
+          "match": [
+            "正贴",
+            "600*1200"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        },
+        {
+          "label": "正贴 750*1500MM (人工71)",
+          "value": "sp750-1500-G",
+          "match": [
+            "正贴",
+            "750*1500"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 71.0
+        },
+        {
+          "label": "正贴 800*1600MM (人工81)",
+          "value": "sp800-1600-G",
+          "match": [
+            "正贴",
+            "800*1600"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 81.0
+        },
+        {
+          "label": "正贴 900*1800MM (人工91)",
+          "value": "sp900-1800-G",
+          "match": [
+            "正贴",
+            "900*1800"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 91.0
+        },
+        {
+          "label": "菱贴 300-800MM (人工48)",
+          "value": "spDiamond-G",
+          "match": [
+            "菱贴"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        }
+      ]
     }
   },
   "QuoteItems": [

@@ -74,22 +74,26 @@ namespace BaoJiaCAD
                 .ToList();
             if (entries.Count == 0) return;
 
-            const int labelW = 100;
-            const int colW = 180;
+            const int labelW = 80;
+            const int comboW = 280;
             int rowH = 32;
             // 把 _btnStart/_btnCancel 向下推 pushUp px, 给瓷砖规格节腾位置 (插在门洞/窗洞 与按钮之间).
-            // 同时把窗体增高 pushUp, 避免底部按被切.
-            int rowsNeeded = (entries.Count + 1) / 2;
+            // 同时窗体增高 pushUp + AutoScroll=true 让超桌高时滚动条出现 (CAD palette 桌高 ≈640px),
+            // 按钮不会被剪 (reviewer HIGH 建议).
+            //   - 2 entries → pushUp = 2*32+22 = 86, 窗体高 560+86 = 646.
+            //   - 4 entries → pushUp = 4*32+22 = 150, 窗体高 560+150 = 710.
+            int rowsNeeded = entries.Count;
             int pushUp = rowsNeeded * rowH + 22;
             int originalBtnTop = _btnStart.Top;
             int originalCancelTop = _btnCancel.Top;
             _btnStart.Top = originalBtnTop + pushUp;
             _btnCancel.Top = originalCancelTop + pushUp;
             this.Size = new Size(this.Width, this.Height + pushUp);
+            this.AutoScroll = true;   // 防 CAD palette 高度限制 — 超过桌高时滚动条兜底
 
             int yStart = originalBtnTop;
-            int xCol1 = 20;
-            int xCol2 = 20 + labelW + 8 + colW + 30;
+            int xLabel = 20;
+            int xCombo = 20 + labelW + 8;
             var sep = new Label
             {
                 Text = "── 瓷砖规格 (按房间) ──",
@@ -105,11 +109,8 @@ namespace BaoJiaCAD
             for (int i = 0; i < entries.Count; i++)
             {
                 string roomType = entries[i].Key;
-            List<TileSpecOption> list = entries[i].Value;
-                bool leftCol = (i % 2 == 0);
-                int xLabel = leftCol ? xCol1 : xCol2;
-                int xCombo = xLabel + labelW + 8;
-                int y = yStart + (i / 2) * rowH;
+                List<TileSpecOption> list = entries[i].Value;
+                int y = yStart + i * rowH;
 
                 var lbl = new Label
                 {
@@ -119,13 +120,23 @@ namespace BaoJiaCAD
                 };
                 var cb = new ComboBox
                 {
-                    Left = xCombo, Top = y, Width = colW,
+                    Left = xCombo, Top = y, Width = comboW,
                     DropDownStyle = ComboBoxStyle.DropDownList
                 };
                 foreach (var spec in list)
                     cb.Items.Add(spec);
                 cb.DisplayMember = nameof(TileSpecOption.Label);
-                cb.SelectedIndex = 0;
+                // 🔧 优先用 isDefault=true 的 spec 作默认; 都无则 index=0.
+                int defaultIdx = -1;
+                for (int s = 0; s < list.Count; s++)
+                {
+                    if (list[s] is TileSpecOption opt2 && opt2.IsDefault)
+                    {
+                        defaultIdx = s;
+                        break;
+                    }
+                }
+                cb.SelectedIndex = defaultIdx >= 0 ? defaultIdx : 0;
 
                 _tileSpecCombos[roomType] = cb;
                 added.Add(lbl);

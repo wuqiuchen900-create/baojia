@@ -68,6 +68,8 @@ namespace BaoJiaCAD
                 // 5. 循环识别每层
                 var allRooms = new List<Room>();
                 var confirmedBoundaries = new List<DetectedBoundary>();
+                // 🔧 未识别文字 全楼层累计器 (供未识别 提醒: 命令列汇总 + YesNo 弹窗 用)
+                var allSkipped = new List<SkippedTextInfo>();
 
                 bool exporting = false;
                 for (int floorIdx = 0; floorIdx < floorCount && !exporting; floorIdx++)
@@ -113,13 +115,13 @@ namespace BaoJiaCAD
                         switch (choice)
                         {
                             case "NEXT":
-                                CommitFloor(confirmedBoundaries, allRooms, result);
+                                CommitFloor(confirmedBoundaries, allRooms, result, allSkipped);
                                 break;
                             case "REDO":
                                 redoThisFloor = true;
                                 break;
                             case "EXPORT":
-                                CommitFloor(confirmedBoundaries, allRooms, result);
+                                CommitFloor(confirmedBoundaries, allRooms, result, allSkipped);
                                 exporting = true;
                                 break;
                         }
@@ -129,6 +131,14 @@ namespace BaoJiaCAD
                 if (allRooms.Count == 0)
                 {
                     editor.WriteMessage("\n未识别到任何房间，命令结束。");
+                    return;
+                }
+
+                // 🔧 未识别房间 提醒: 命令列汇总 + YesNo 弹窗 (Yes 继续导出 / No 取消 BJ) — 才能 让门窗洞口/复杂结构
+                //     导致识别遗漏的文字 强制在用户眼前出现一次 才能知晓.
+                if (!ShowSkippedReminderDialog(editor, allSkipped, allRooms.Count))
+                {
+                    editor.WriteMessage("\n[未识别提醒] 用户选择取消 BJ, 命令退出.");
                     return;
                 }
 
@@ -200,12 +210,16 @@ namespace BaoJiaCAD
 
         /// <summary>
         /// 把当前层成功的识别结果提交到全局列表 + 跨层去重缓存
+        /// allSkipped: 本层未识别文字 (仅 NEXT/EXPORT 时合并, REDO 抛弃) — 供最终弹窗汇总用.
         /// </summary>
         private static void CommitFloor(List<DetectedBoundary> confirmed,
-            List<Room> allRooms, DetectionResult result)
+            List<Room> allRooms, DetectionResult result,
+            List<SkippedTextInfo> allSkipped)
         {
             confirmed.AddRange(result.NewBoundaries);
             allRooms.AddRange(result.Rooms);
+            if (allSkipped != null && result.SkippedTexts != null && result.SkippedTexts.Count > 0)
+                allSkipped.AddRange(result.SkippedTexts);
         }
 
         private void PrintDiagnostics(Editor editor, DetectionResult result)
@@ -213,40 +227,48 @@ namespace BaoJiaCAD
             editor.WriteMessage("\n---- 本次识别 ----");
             if (result.Rooms.Count > 0)
             {
-                editor.WriteMessage($"  [OK] 成功识别 {result.Rooms.Count} 个房间：");
+                editor.WriteMessage($"\n  [OK] 成功识别 {result.Rooms.Count} 个房间：");
                 foreach (var r in result.Rooms)
                 {
                     string f = string.IsNullOrEmpty(r.FloorLevel) ? "[无前缀]" : $"[{r.FloorLevel}]";
-                    editor.WriteMessage($"    {f} {r.Name} (地面 {r.FloorArea:F2} ㎡)");
+                    editor.WriteMessage($"\n    {f} {r.Name} (地面 {r.FloorArea:F2} ㎡)");
                 }
             }
             if (result.SkippedTexts.Count > 0)
             {
-                editor.WriteMessage($"  [跳过] {result.SkippedTexts.Count} 个文字（未识别为房间）：");
-                int show = Math.Min(5, result.SkippedTexts.Count);
-                for (int i = 0; i < show; i++) editor.WriteMessage($"    - {result.SkippedTexts[i]}");
-                if (result.SkippedTexts.Count > show)
-                    editor.WriteMessage($"    ... (另外 {result.SkippedTexts.Count - show} 条)");
+                // 🔧 未识别 醒目块: 全列出 (不再 truncate 到 5), 含坐标便于 CAD 里 ZOOM 过去
+                editor.WriteMessage($"\n  [!! ⚠ 未识别] {result.SkippedTexts.Count} 个文字未匹配, 已跳过 (不计入报价单):");
+                int maxShow = 50;  // 防 CAD 命令列刷屏
+                for (int i = 0; i < result.SkippedTexts.Count && i < maxShow; i++)
+                {
+                    var s = result.SkippedTexts[i];
+                    editor.WriteMessage($"\n    - 「{s.Text}」@(X={s.X:F1}mm Y={s.Y:F1}mm) — {s.Reason}");
+                }
+                if (result.SkippedTexts.Count > maxShow)
+                {
+                    editor.WriteMessage($"\n    ... (另外 {result.SkippedTexts.Count - maxShow} 条, 略)");
+                }
+                editor.WriteMessage($"\n  ⚠ 上述已跳过文字未计入本次报价. 若需识别, 在 config.json RoomTypeMaps 扩充 Keywords 后重跑 BJ.");
             }
             if (result.BoundaryWarnings.Count > 0)
             {
-                editor.WriteMessage($"  [边界] {result.BoundaryWarnings.Count} 个警告：");
-                foreach (var t in result.BoundaryWarnings) editor.WriteMessage($"    - {t}");
+                editor.WriteMessage($"\n  [边界] {result.BoundaryWarnings.Count} 个警告:");
+                foreach (var t in result.BoundaryWarnings) editor.WriteMessage($"\n    - {t}");
             }
             if (result.Warnings.Count > 0)
             {
-                editor.WriteMessage($"  [警告] {result.Warnings.Count} 个：");
-                foreach (var t in result.Warnings) editor.WriteMessage($"    - {t}");
+                editor.WriteMessage($"\n  [警告] {result.Warnings.Count} 个:");
+                foreach (var t in result.Warnings) editor.WriteMessage($"\n    - {t}");
             }
-            editor.WriteMessage("-------------------");
+            editor.WriteMessage("\n-------------------");
         }
 
         private string PromptAfterDetection(Editor editor, bool isMultiFloor, int floorIdx, int floorCount)
         {
             bool hasMoreFloors = isMultiFloor && (floorIdx + 1 < floorCount);
             string prompt = hasMoreFloors
-                ? "\n[下一层 C] / [重选本层 R] / [开始报价 E] / [取消 Q]："
-                : "\n[重选本层 R] / [开始报价 E] / [取消 Q]：";
+                ? "\n[下一层 C] / [重选本层 R] / [开始报价 E] / [取消 Q]:"
+                : "\n[重选本层 R] / [开始报价 E] / [取消 Q]:";
 
             while (true)
             {
@@ -385,6 +407,67 @@ namespace BaoJiaCAD
 
             throw new FileNotFoundException(
                 $"模板文件未找到。请检查 config.json 的 TemplateSettings 是否有效，或将 template.xlsx 放在插件 DLL 同级目录:\n{dllDir}");
+        }
+
+        /// <summary>
+        /// 🔧 未识别 提醒: 命令列最终汇总块 + YesNo MessageBox 弹窗 (Yes=继续导出, No=取消 BJ)
+        /// 当 allSkipped 不空时调用, 让用户决定是接受现状 还是 中止去 config.json 补 Keywords。
+        /// 弹窗默认按钮是「继续导出」 (Yes), —不 是「取消」 — 以免误操作丢失已完成的工作。
+        /// </summary>
+        private bool ShowSkippedReminderDialog(Editor editor, List<SkippedTextInfo> allSkipped, int roomCount)
+        {
+            if (allSkipped == null || allSkipped.Count == 0) return true;
+
+            // 1. 命令列 吼一次 (供 F2 trace / IDE 输出用)
+            editor.WriteMessage("\n========== ⚠ 识别遗漏 · 最终汇总 ==========");
+            editor.WriteMessage($"\n  本次 BJ 共识别 {roomCount} 个房间 (已计入报价), 另 {allSkipped.Count} 个文字未识别:");
+            int maxShow = 30;
+            for (int i = 0; i < allSkipped.Count && i < maxShow; i++)
+            {
+                var s = allSkipped[i];
+                editor.WriteMessage($"\n    {i + 1}. 「{s.Text}」@(X={s.X:F1}mm Y={s.Y:F1}mm) — {s.Reason}");
+            }
+            if (allSkipped.Count > maxShow)
+            {
+                editor.WriteMessage($"\n    ... 另有 {allSkipped.Count - maxShow} 项 (略)");
+            }
+            editor.WriteMessage("\n===========================================");
+
+            // 2. 弹窗 YesNo (默认 Yes = 继续导出, 用户可点 No 中止 BJ 回去加 Keywords)
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"⚠ BJ 识别结果:");
+            sb.AppendLine($"  - 已识别 {roomCount} 个房间 (计入报价)");
+            sb.AppendLine($"  - 未识别 {allSkipped.Count} 个文字 (已跳过, 不计入报价)");
+            sb.AppendLine();
+            sb.AppendLine("未识别清单:");
+            int showDetail = Math.Min(20, allSkipped.Count);
+            for (int i = 0; i < showDetail; i++)
+            {
+                var s = allSkipped[i];
+                sb.AppendLine($"  {i + 1}. 「{s.Text}」  (位置 X={s.X:F0}mm Y={s.Y:F0}mm)  — {s.Reason}");
+            }
+            if (allSkipped.Count > showDetail)
+            {
+                sb.AppendLine($"  ... 另有 {allSkipped.Count - showDetail} 项 (略)");
+            }
+            sb.AppendLine();
+            sb.AppendLine("[是(默认)] 继续导出 (xlsx 不含未识别文字) ");
+            sb.AppendLine("[否]       取消 BJ, 您可去 config.json RoomTypeMaps 扩充 Keywords 后重跑");
+
+            var res = System.Windows.Forms.MessageBox.Show(
+                sb.ToString(),
+                "⚠ 识别遗漏 (未计入本次报价)",
+                System.Windows.Forms.MessageBoxButtons.YesNo,
+                System.Windows.Forms.MessageBoxIcon.Warning,
+                System.Windows.Forms.MessageBoxDefaultButton.Button1 /* Yes = 继续 */
+            );
+            if (res == System.Windows.Forms.DialogResult.Yes)
+            {
+                editor.WriteMessage("\n[未识别提醒] 用户选择继续导出.");
+                return true;
+            }
+            editor.WriteMessage("\n[未识别提醒] 用户选择取消 BJ.");
+            return false;
         }
     }
 
