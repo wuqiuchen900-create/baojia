@@ -141,6 +141,17 @@ namespace BaoJiaCAD
                         LaborPrice = 13.0,
                         CalcRule = "CeilingAndWall",
                         Description = "鸟巢水性嵌缝石膏补顶缝、瑞安健康找平腻子底层、瑞安健康腻子面层、白布、砂纸、牛皮纸、人工及机具费。"
+                    },
+                    // 🔧 v16: 窗帘盒 (curtain box). 数量 = room.CurtainBoxLength (米, 由 WindowBoxDetector 自动检测填充).
+                    //   模板需建一行名含「窗帘盒」的子项. ExcelExporter.FillRoomData 走 IsCurtainBoxItem 独立路径.
+                    new QuoteItemConfig
+                    {
+                        Name = "窗帘盒",
+                        Unit = "m",
+                        MaterialPrice = 0.0,
+                        LaborPrice = 0.0,
+                        CalcRule = "CurtainBox",
+                        Description = "按房间内覆盖窗户的墙段总长(米)计。WindowBoxDetector 自动扫 DWG (Layer=\"窗户\" 或 显式 ColorIndex 251) 检测。"
                     }
                 },
                 TemplateSettings = new TemplateSettingsConfig

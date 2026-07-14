@@ -150,7 +150,10 @@ namespace BaoJiaCAD
                         FloorLevel = finalFloor,
                         FloorArea = area,
                         Perimeter = perimeter,
-                        WallHeight = _wallHeight
+                        WallHeight = _wallHeight,
+                        // 🔧 v16: 内存 Polyline 克隆 — AutoCAD temp polyline 随 tr 而死.
+                        //   WindowBoxDetector 在 DetectRooms 之后 Read polyline → 必须克隆到自有实例 (Commands 终态 Dispose 清理).
+                        BoundaryPolyline = ClonePolylineToMemory(boundary)
                     };
 
                     GenerateQuoteItems(room);
@@ -189,6 +192,25 @@ namespace BaoJiaCAD
         {
             var pt = GetTextPoint(ent);
             return (pt.X, pt.Y);
+        }
+
+        /// <summary>
+        /// 🔧 v16: AutoCAD temp Polyline (TraceBoundary 返回) → 自有 in-memory Polyline.
+        ///   - AutoCAD temp entities 随 transaction 而死, WindowBoxDetector 在 DetectRooms 之后跑时原实例已不存在.
+        ///   - 用 vertices 重建一个不挂 BlockTable 的 Polyline, 完全自己控制 Dispose 周期.
+        ///   - 保留 GetPoint2dAt / Closed / GetClosestPointTo (几何检测需要).
+        ///   - 调用方负责 Dispose (Commands.BaoJia 终态统一清掉 allRooms 中每个 room.BoundaryPolyline).
+        /// </summary>
+        private static Autodesk.AutoCAD.DatabaseServices.Polyline ClonePolylineToMemory(
+            Autodesk.AutoCAD.DatabaseServices.Polyline src)
+        {
+            if (src == null) return null;
+            var mem = new Autodesk.AutoCAD.DatabaseServices.Polyline();
+            int n = src.NumberOfVertices;
+            for (int i = 0; i < n; i++)
+                mem.AddVertexAt(i, src.GetPoint2dAt(i), src.GetBulgeAt(i), 0, 0);
+            mem.Closed = src.Closed;
+            return mem;
         }
 
         private Point3d GetCentroid(Polyline pline)
@@ -283,20 +305,24 @@ namespace BaoJiaCAD
         private void GenerateQuoteItems(Room room)
         {
             foreach (var configItem in _config.QuoteItems)
-            {
-                double quantity = 0;
-                switch (configItem.CalcRule)
-                {
-                    case "Floor":
-                        quantity = room.FloorArea;
-                        break;
-                    case "CeilingAndWall":
-                        quantity = room.WallArea;
-                        break;
-                    default:
-                        quantity = room.FloorArea;
-                        break;
-                }
+            {                    double quantity = 0;
+                    switch (configItem.CalcRule)
+                    {
+                        case "Floor":
+                            quantity = room.FloorArea;
+                            break;
+                        case "CeilingAndWall":
+                            quantity = room.WallArea;
+                            break;
+                        case "CurtainBox":
+                            // 🔧 v16.1: 这是 占位值 (DetectRooms 时 还没 WindowBoxDetector → CurtainBoxLength=0).
+                            //   Commands.BaoJia 在 Export 前 调 UpdateRoomItemsCurtainBox 把它刷成真实米数.
+                            quantity = 0.0;
+                            break;
+                        default:
+                            quantity = room.FloorArea;
+                            break;
+                    }
 
                 room.Items.Add(new QuoteItem
                 {

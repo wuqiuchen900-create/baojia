@@ -222,6 +222,23 @@ namespace BaoJiaCAD
                 CategoryPanel.AskBathroomKitchenFormulas(editor, allRooms, config);
                 CategoryPanel.ShowSixCategories(editor, allRooms, wallHeight, config);
 
+                // 🔧 v16: 窗帘盒长度检测 — 扫 DWG 找出每个房间 覆盖窗户的墙段, 累加 (米) -> room.CurtainBoxLength.
+                //   在 ExcelExporter 导出前调, 这样 Excel 填充时 IsCurtainBoxItem 路径读到 CurtainBoxLength 已 > 0.
+                WindowBoxDetector.DetectCurtainBoxLengths(allRooms, editor, config, msg => editor.WriteMessage($"\n{msg}"));
+
+                // 🔧 v16.1 fix (round-3 reviewer Q2): 同步刷 room.Items + 清理 in-memory Polyline 克隆 都 移到 exporter 之前.
+                //   (reviewer #4 nice-to-have: 该 段 在 finally 更稳 — 但 C# 要求 catch 必须在 finally 前, 加 江西 not 不 优美.
+                //    本轮 取此 实现 — 提前到 exporter 前, Export 抛 catch 仍 跑 catch 报告, leak 不 发生.)
+                WindowBoxDetector.UpdateRoomItemsCurtainBox(allRooms);
+                foreach (var room in allRooms)
+                {
+                    if (room != null && room.BoundaryPolyline != null && !room.BoundaryPolyline.IsDisposed)
+                    {
+                        try { room.BoundaryPolyline.Dispose(); } catch { /* best-effort */ }
+                        room.BoundaryPolyline = null;
+                    }
+                }
+
                 var exporter = new ExcelExporter();
                 exporter.Log = msg => editor.WriteMessage($"\n[报价] {msg}");
                 exporter.Export(allRooms, projectName, templatePath, primaryTemplateName, floorTemplatePaths, outputPath, config);

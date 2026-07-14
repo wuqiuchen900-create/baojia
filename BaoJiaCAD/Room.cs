@@ -42,6 +42,15 @@ namespace BaoJiaCAD
         /// <summary>房间内通用公式（卫生间/厨房贴瓷片、防水保护层、背胶 等子项名 → 数量）</summary>
         public Dictionary<string, double> ItemFormulas { get; set; }
             = new Dictionary<string, double>();
+
+        /// <summary>🔧 v16: 房间 BO 边界的 内存 Polyline 克隆 (WindowBoxDetector 用来精定位窗户→墙段 映射).
+        ///   RoomDetector.DetectRooms 创建; WindowBoxDetector 用完; Commands.BaoJia 终态 Dispose 清理.
+        ///   不依赖 AutoCAD temp entities 生命周期 (后者随 tr 而死), 不 Append 到 BlockTable, 完全内存对象.</summary>
+        public Autodesk.AutoCAD.DatabaseServices.Polyline BoundaryPolyline { get; set; }
+
+        /// <summary>🔧 v16: 窗帘盒总长 (米) — 该房间所有「覆盖窗户的墙段」长度之和.
+        ///   默认 0.0; WindowBoxDetector.DetectCurtainBoxLengths 后 填入. 浮空窗户不计入.</summary>
+        public double CurtainBoxLength { get; set; } = 0.0;
     }
 
     /// <summary>

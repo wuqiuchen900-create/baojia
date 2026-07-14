@@ -1521,6 +1521,16 @@ namespace BaoJiaCAD
                     filled++;
                     Debug($"    填墙面 行{item.Row}: [{item.Name}] 数量={room.WallArea:F2}");
                 }
+                else if (IsCurtainBoxItem(item.Name))
+                {
+                    var qty = Math.Round(room.CurtainBoxLength, 2, MidpointRounding.AwayFromZero);
+                    ws.Cell(item.Row, 3).Value = qty;
+                    filled++;
+                    if (qty > 0)
+                        Debug($"    [窗帘盒] 行{item.Row}: [{item.Name}] 数量={qty:F2} m (房 [{room.Name}])");
+                    else
+                        Debug($"    [窗帘盒] 行{item.Row}: [{item.Name}] 数量=0 m (房 [{room.Name}] 未侦到窗户 — DWG 里无 Layer=窗户 且 Color≠251 线段, 或 浮空)");
+                }
             }
             if (hasOutdoor && outdoorHit == 0)
                 Debug($"    [! 警告] 房间 [{room.Name}] IsWaterproofedRoll 参数已设但模板未匹配外花园项, 请检查模板是否定全");
@@ -1614,6 +1624,17 @@ namespace BaoJiaCAD
         {
             if (string.IsNullOrEmpty(name)) return false;
             return GetWallKeywords(config).Any(k => name.Contains(k));
+        }
+
+        /// <summary>
+        /// 🔧 v16: 模板行 名 含「窗帘盒」匹配.
+        ///   FloorItemKeywords / WallItemKeywords 都不会勾它 — 走这条独立路径 直接 读 room.CurtainBoxLength (=米).
+        ///   不动材质/人工 价格 (用户另设) — 只填 C3 数量列.
+        /// </summary>
+        private static bool IsCurtainBoxItem(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            return name.Contains("窗帘盒");
         }
 
         /// <summary>
