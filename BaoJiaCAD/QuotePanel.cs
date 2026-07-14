@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 namespace BaoJiaCAD
@@ -57,6 +58,13 @@ namespace BaoJiaCAD
         {
             "fushi", "zhubaojiao"
         };
+        // 🔧 v13.1: master/follower spec 同步 — 客餐厅 = master, [主卧 / 卧室 / 厨房 / 阳台 / 外花园] = follower 默认 跟随 master 变更, 任 follower 被用户 手动改 后 标 manual_override 不再 跟随. 卫生间 / 主卫 独立 不 跟随.
+        private const string _masterSpecRoomType = "客餐厅";
+        private static readonly HashSet<string> _followerSpecRoomTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "主卧", "卧室", "厨房", "阳台", "外花园"
+        };
+        private static readonly Regex _specSizeTokenRegex = new Regex(@"\d+(?:[\-\*]\d+)?MM", RegexOptions.Compiled);
 
         /// <summary>用户面板 NONE marker. ExcelExporter 看到此值 → selectedSpecCached=null, 跳过 PHASE A (mudiban 风格).</summary>
         public const string NoneSpecValue = "<NONE>";
@@ -179,31 +187,37 @@ namespace BaoJiaCAD
                     Left = xCombo, Top = y, Width = comboW,
                     DropDownStyle = ComboBoxStyle.DropDownList
                 };
+                // 🔧 v14: 单层 UI 也 prepend NoneSpecOption (idx 0) — 此前仅复式 UI prepend, 单层 UI 缺 "<无/木地板>" 选项.
+                //   复式 行 这里也走同一 NoneSpecValue (NoneSpecOption), 单+复 行为统一. 选中 → ExcelExporter FillRoomData 检测 <NONE> 做特殊 layout (e.g. mudiban 客厅 ← 地砖改 找平 + 保护=0).
+                cb.Items.Add(NoneSpecOption);
                 foreach (var spec in list)
                     cb.Items.Add(spec);
                 cb.DisplayMember = nameof(TileSpecOption.Label);
-                int defaultIdx = -1;
+                // defaultIdx: list[0] 现在位于 cb.Items[1] (because NONE prepended) — 选定 IsDefault spec 时 +1.
+                int defaultSpecIdx = -1;
                 for (int s = 0; s < list.Count; s++)
                 {
                     if (list[s] is TileSpecOption opt2 && opt2.IsDefault)
                     {
-                        defaultIdx = s;
+                        defaultSpecIdx = s;
                         break;
                     }
                 }
-                cb.SelectedIndex = defaultIdx >= 0 ? defaultIdx : 0;
+                cb.SelectedIndex = defaultSpecIdx >= 0 ? (defaultSpecIdx + 1) : 1;
 
-                _tileSpecCombos[roomType] = cb;
-                _pnlSingleSpec.Controls.Add(lbl);
-                _pnlSingleSpec.Controls.Add(cb);
-            }
-            this.Controls.Add(_pnlSingleSpec);
+            _tileSpecCombos[roomType] = cb;
+            _pnlSingleSpec.Controls.Add(lbl);
+            _pnlSingleSpec.Controls.Add(cb);
+        }
+        this.Controls.Add(_pnlSingleSpec);
+        // 🔧 v13: 单层 panel 的 客餐厅 ↔ [厨房/主卧/阳台/外花园] master/follower 同步
+        WireSpecMasterSync(_tileSpecCombos);
 
             // ── 多楼层 TableLayoutPanel (默认隐藏) ──
             _tlpMultiSpec = new TableLayoutPanel
             {
                 Location = new Point(20, originalBtnTop),
-                Size = new Size(840, multiHeightNeeded),
+                Size = new Size(1660, multiHeightNeeded),  // 🔧 v13.3 expand: 840 → 1660 容纳 8 个 180F spec cols + 130 + 60.
                 Visible = false,
                 AutoSize = false,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.Single,
@@ -240,7 +254,7 @@ namespace BaoJiaCAD
             _tlpMultiSpec.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130F));
             _tlpMultiSpec.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60F));
             for (int c = 2; c < cols; c++)
-                _tlpMultiSpec.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110F));
+                _tlpMultiSpec.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180F));  // 🔧 v13.3 expand: 110F 不能 装 "正铺 750*1500MM (人工71)" (~154px) — 截断 as "正铺 75C". 8 个 spec cols × 180F = 1440 + 130(template) + 60(alias) = 1630.
             // 行高: 32px
             _tlpMultiSpec.RowStyles.Clear();
             for (int r = 0; r < rows; r++)
@@ -367,6 +381,11 @@ namespace BaoJiaCAD
                     _multiFloorCombos[(floorAlias, roomType)] = cb;
                     _tlpMultiSpec.Controls.Add(cb, c + 2, r + 1);
                 }
+                // 🔧 v13: master/follower 同步 — 每行 独立 跟随, 跨层 不 串.
+                var rowCombos = new Dictionary<string, ComboBox>();
+                for (int c2 = 0; c2 < _specRoomTypesCache.Count; c2++)
+                    rowCombos[_specRoomTypesCache[c2]] = cells[r, c2];
+                WireSpecMasterSync(rowCombos);
             }
 
             _tlpMultiSpec.ResumeLayout(true);   // 🔧 v9: ResumeLayout(true) 强制立即 layout pass — false 会 推迟 到下个 idle, AutoCAD palette 不发 idle 信号 → 行不画
@@ -426,7 +445,7 @@ namespace BaoJiaCAD
                     _tlpMultiSpec.Visible = mf;
                     if (mf) RebuildMultiFloorGrid();
                 }
-                this.Width = mf ? 880 : 440;
+                this.Width = mf ? 1700 : 440;  // 🔧 v13.3 expand: 880 → 1700 容纳 TLP (1630) + 20 padding × 2 = 1670 + 20 marign = 1690+10 extra.
             };
             y += rowH;
 
@@ -628,6 +647,64 @@ namespace BaoJiaCAD
             d.BalconyWaterproofHeight = (double)_numBalconyWaterproof.Value;
             d.OutdoorGardenRollHeight = (double)_numGardenRoll.Value;
             d.OutdoorGardenNonRollHeight = (double)_numGardenNonRoll.Value;
+        }
+
+        // 🔧 v13: master/follower spec 同步 — 客餐厅 改, [厨房/主卧/阳台/外花园] 默认 跟着, 任 follower 被 用户 手动 改 后 标 "override" 不再 跟随.
+        //   同步规则: master SelectedItem.Label 抽 SIZE_TOKEN (按正则 "\d+([-*]\d+)?MM" , 例 "750*1500MM") → 找 follower.Items 中 Label 也 含同 token 的项 设 它.
+        //   这样 跨 正铺/正贴/菱 family 仍 同步 (e.g. 客餐厅 选 "正铺 750*1500MM" 厨房 跳 到 "正贴 750*1500MM"; 阳/外 同 family 同步 同标签).
+        //   独立 RoomType (卧室/卫生间/主卫) 不进 followers — 不 跟随 master.
+        private void WireSpecMasterSync(IEnumerable<KeyValuePair<string, ComboBox>> comboDict)
+        {
+            ComboBox master = null;
+            var followers = new List<ComboBox>();
+            foreach (var kv in comboDict)
+            {
+                if (kv.Key == _masterSpecRoomType) { master = kv.Value; continue; }
+                if (_followerSpecRoomTypes.Contains(kv.Key)) followers.Add(kv.Value);
+            }
+            if (master == null || followers.Count == 0) return;
+
+            foreach (var fb in followers) fb.Tag = false;
+
+            EventHandler followerMarker = null;
+            followerMarker = (s, e) => { ((ComboBox)s).Tag = true; };
+            foreach (var fb in followers) fb.SelectedIndexChanged += followerMarker;
+
+            // 🔧 v13.2 bug fix: 抽 local function ApplySyncSafely — 临时 detach followerMarker, 程序设的 SelectedIndex 不 误标 override.
+            //   v13.1 bug: 初始 sync 调 SyncFromMasterToFollowers 时 未 detach, 每个 follower SelectedIndex 程序设 跳 触发 followerMarker, 全体 被 误 标 override, 后 续 master 改 全部 被 跳过.  v13.2 补 让 master event + initial sync 共用 同一个 detach/reattach 流程.
+            void ApplySyncSafely()
+            {
+                foreach (var fb in followers) fb.SelectedIndexChanged -= followerMarker;
+                try { SyncFromMasterToFollowers(master, followers); }
+                finally
+                {
+                    foreach (var fb in followers) fb.SelectedIndexChanged += followerMarker;
+                }
+            }
+
+            master.SelectedIndexChanged += (s, e) => ApplySyncSafely();
+            // 初次 panel 打开 时 master 已有 SelectedIndex (IsDefault / index 0), 触 一次同步. 走 ApplySyncSafely 避免 初始 follower 被 误标 override.
+            if (master.SelectedIndex >= 0) ApplySyncSafely();
+        }
+
+        private static void SyncFromMasterToFollowers(ComboBox master, List<ComboBox> followers)
+        {
+            var sel = master.SelectedItem as TileSpecOption;
+            if (sel?.Label == null) return;
+            var match = _specSizeTokenRegex.Match(sel.Label);
+            if (!match.Success) return;
+            string masterSizeToken = match.Value;
+            foreach (var fb in followers)
+            {
+                if (fb.Tag is bool overridden && overridden) continue;
+                var matchOpt = fb.Items.OfType<TileSpecOption>()
+                    .FirstOrDefault(x => x?.Label != null && x.Label.Contains(masterSizeToken));
+                if (matchOpt != null)
+                {
+                    int idx = fb.Items.IndexOf(matchOpt);
+                    if (idx >= 0) fb.SelectedIndex = idx;
+                }
+            }
         }
 
         /// <summary>

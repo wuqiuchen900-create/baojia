@@ -56,6 +56,13 @@ namespace BaoJiaCAD
                 // 面板防水参数回写到 config（覆盖 config.json 默认值，仅本次生效）
                 panel.ApplyWaterproofToConfig(config);
 
+                // 🔧 v14.2 修复: 面板 dropdown 选 的 模板 需 写回 config.TemplateSettings.ActiveTemplate.
+                //   复式 路径走 config.SelectedFloorTemplates 不会读 ActiveTemplate, 但 单层 路径 是用 ActiveTemplate 作为 fallback (ExcelExporter v14 sourceTplV14).
+                //   不写回 → ActiveTemplate 保留 stale (config.json 全局), 单层 + 客 None + mudiban special 检测 永远 fail.
+                //   overrideTemplate 总是 非空 (panel.SelectedTemplate 已 ?? "dizhuan" fallback) — 不用 IsNullOrEmpty 重检。
+                if (config?.TemplateSettings != null)
+                    config.TemplateSettings.ActiveTemplate = overrideTemplate;
+
                 // 面板瓷砖规格回写到 config.SelectedTileSpecs (运行时, 不持久化)
                 //   - ExcelExporter.FillRoomData 读这个 dict + TileSpecOptions.Match 做 spec-blanking
                 config.SelectedTileSpecs = panel.GetTileSpecSelections();

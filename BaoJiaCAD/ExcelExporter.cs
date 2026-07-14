@@ -204,6 +204,22 @@ namespace BaoJiaCAD
             "\u83f1\u8d34",  // 菱贴
         };
 
+        // 🔧 v14.2 fix: 通配 「MM 规格 sub-string」 检测 — catch 「600MM 圆形实木石砖线（300-800MM）」 / 「瓷质玻化砖（800*800MM）」 等 nomes 不含 「正铺」/「铺地砖」/「客厅」/「抹地」 的 多个 名字 形式.
+        //   static readonly (不是 per-call 实例) — 避免每次 FillRoomData 都重市场编译，去 与 同文件 InvalidDefinedNameRegex / GroupHeaderRegex 一致。
+        private static readonly Regex DirtSpecRegex = new Regex(
+            @"\d+(?:[-*]\d+)?\s*MM[\)\uff09\s]*",
+            RegexOptions.Compiled);
+
+        // 🔧 v15 扩展 v14 trigger: 除 客餐厅 外, 阳台 / 外花园 也 同 走 special layout.
+        //   理由: config.RoomTypeFallbackMap 已 让 阳台 / 外花园 fallback → 客餐厅 group (mudiban 模板中) —
+        //     helper 内容 (rename 实木石砖线 → 地面找平 + 地面保护=0 + 墙面行 wallArea 与 RoomType 无关) 通用适用.
+        //   其他 RoomType (主卧 / 卧室 / 厨房 / 卫生间 / 主卫) 不 触发 — 它们 没 「正铺地砖」+「地面保护」 同 group 形式,
+        //     即便 user 选 NONE 也不需 该 layout (例 主卧 NONE 走 老 PHASE A 0-out; 厨房 NONE 不 动 防 套装错位).
+        private static readonly HashSet<string> _v14TriggerRoomTypes = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "客餐厅", "阳台", "外花园"
+        };
+
         private string PreprocessInvalidDefinedNames(string srcPath)
         {
             if (!File.Exists(srcPath)) return srcPath;
@@ -1109,6 +1125,140 @@ namespace BaoJiaCAD
         }
 
         // ====================================================================
+        // 🔧 v14 (v15 扩展): 客餐厅 / 阳台 / 外花园 + mudiban 模板 + "用户选 <无>" → special layout.
+        //   逻辑: 房型 ∊ {客餐厅,阳台,外花园} + 模板 mudiban + user 选 "<无>" → 不走 PHASE A/B/C 默认路径,
+        //     而是: “客厅及餐厅正铺地砖” (或 “原地” 或 “铺地砖”) 行 改名 “地面找平” + 填 C3 = room.FloorArea;
+        //     “地面保护” 行 填 C3 = 0; 其他 (墙面类) 走 IsWallItem 原逻辑.
+        //   def 动机: mudiban 模板中 这 3 类房 groups 通常只有 “正铺地砖” + “地面保护” 2 row, 没 “地面找平”,
+        //     这 状态下业主说 “没贴砖” = 取消地砖, 但需保留 找平 + 不需保护 = 原 spec 这 2 row 错位.
+        //   v15 扩展: 阳台 / 外花园 走 Special 是因 RoomTypeFallbackMap 它们 fallback 至 客餐厅 group,
+        //     helper 内容 与 RoomType 无关, 仅 改写 「正铺地砖」行 + 「地面保护」行 — 通用 适用.
+        //   採 user 概率低但 要能选 — v14 加; v15 同步 阳/外 — user 报 “阳台 / 外花园 选 NONE 不走” 后 加 ).
+        // ====================================================================
+        private int ApplyLivingRoomNoneMudiban(IXLWorksheet ws, TemplateGroup group, Room room, QuoteConfig config)
+        {
+            int filled = 0;
+            double floorArea = Math.Round(room.FloorArea, 2, MidpointRounding.AwayFromZero);
+
+            // 🔧 v14 fix(reviewer 1): C9 marker 用 PHASE A 同模式 — 保留 原 备注 + 仅 strip 旧 v14 marker 再 加 新.
+            Action<int, string> writeMarker = (row, marker) =>
+            {
+                string rawDesc = CellString(ws.Cell(row, 9)) ?? string.Empty;
+                string cleaned = Regex.Replace(rawDesc, @"\n?【v14 mudiban 客None:.*?】", string.Empty, RegexOptions.Singleline).TrimEnd('\n', '\r');
+                ws.Cell(row, 9).Value = (cleaned.Length == 0 ? marker : cleaned + "\n" + marker);
+            };
+            // 🔧 v14 fix(reviewer 2): existing 「地面找平」 detection FIRST — 修 CS0841 (之前 是 另一个 后序 块调用了 existingFloorLevelingRow 才 声明)。
+            TemplateItem existingFloorLevelingRow = group.Items.FirstOrDefault(i =>
+                !string.IsNullOrEmpty(i.Name) && i.Name.Contains("地面找平"));
+            // 🔧 v14.2/14.5 fix: dirtRow via static DirtSpecRegex (避免 「600MM 圆形实木石砖线（300-800MM）」 / 「瓷质玻化砖（800*800MM）」 等 nomes 不含 「正铺」/「铺地砖」/「客厅」 的 多个 名字 形式).
+            //   「处理」 dropped — 不 误中 「倒角处理」/「磨光处理」 等 tile 相关 行 (这些 应 改名/填 ㎡ 而 不 是 错中)。
+            //   🔧 v14.5 fix (user 反馈 「错行被改了」): DirtSpecRegex 路径 加 材质 keyword gate (砖/瓷/玻/石/木) —
+            //     不 误中 「5MM 圆角倒角」/「5MM 打磨处理」 等 含 MM 但 不 是 真 地砖 的 sub-spec 字符串。 之前 「普通艺术石渍玻线（300-800MM）」 会被 误抓 (在地砖行 以上)
+            //     然后 被 FirstOrDefault 选 中 — 造成 「错行改了」 现象。 现在 需 名 字 含 至少 一个 材质 keyword 才 可 候选。
+            // 🔧 v14.6: FirstOrDefault → LastOrDefault — 在 mudiban 客 group 中 双多形 (e.g. 「普通艺术石渍玻线（300-800MM）」 + 「800MM圆形实木石砖线（300-800MM）」 都 match 材料+MM),
+            //   主 规格 row 通常是 group 中末位。原 FirstOrDefault 错 中 前行, 用户 已 报 「错行被改」. 现 取 末位 = 真 dirt row.
+            TemplateItem dirtRow = group.Items.LastOrDefault(i =>
+                !string.IsNullOrEmpty(i.Name)
+                && !i.Name.Contains("找平") && !i.Name.Contains("保护")
+                && !i.Name.Contains("防水") && !i.Name.Contains("墙面") && !i.Name.Contains("顶面")
+                && !i.Name.Contains("乳胶漆") && !i.Name.Contains("腻子") && !i.Name.Contains("基层")
+                && !i.Name.Contains("勾缝")
+                && (
+                    // 1) canonical 命名 - 已 隐 含 含 「砖」/「抹地」 等材类
+                    i.Name.Contains("正铺地砖") || i.Name.Contains("铺地砖") || i.Name.Contains("抹地")
+                    || i.Name.Contains("客厅及餐厅地砖") || i.Name.Contains("客厅及餐厅正铺")
+                    // 2) 通配 MM: 同时 必 含 砖/瓷/玻/石/木 任 一 材质 keyword - 这 才 是 真 地砖行
+                    || (DirtSpecRegex.IsMatch(i.Name)
+                        && (i.Name.Contains("砖") || i.Name.Contains("瓷") || i.Name.Contains("玻")
+                            || i.Name.Contains("石") || i.Name.Contains("木")))
+                ));
+            if (dirtRow != null)
+                Debug($"    [v14 客None mudiban] dirtRow 命中 行{dirtRow.Row} [{dirtRow.Name}] (材料 + MM 路径, LastOrDefault 主规格优先)");
+            var handledRows = new HashSet<TemplateItem>();
+
+            if (existingFloorLevelingRow != null)
+            {
+                // Case A/C: 现有 找平 已 在 group → 直接 fill floorArea, 不 改名
+                ws.Cell(existingFloorLevelingRow.Row, 3).Value = floorArea;
+                writeMarker(existingFloorLevelingRow.Row, "【v14 mudiban 客None: 现有地面找平已应用, 数量=㎡】");
+                handledRows.Add(existingFloorLevelingRow);
+                filled++;
+                Debug($"    [v14 mudiban 客None] 现有找平行{existingFloorLevelingRow.Row} [{existingFloorLevelingRow.Name}] C3={floorArea:F2}");
+
+                // 同时 group 中 「正铺地砖」 行 0-out — 同 group 双计 防护。
+                if (dirtRow != null)
+                {
+                    ws.Cell(dirtRow.Row, 3).Value = 0m;
+                    writeMarker(dirtRow.Row, "【v14 mudiban 客None: 同 group 已有找平, 此正铺地砖禁用】");
+                    handledRows.Add(dirtRow);
+                    filled++;
+                    Debug($"    [v14 mudiban 客None] 同 group dirtRow{dirtRow.Row} [{dirtRow.Name}] 0-out 防双计");
+                }
+            }
+            else if (dirtRow != null)
+            {
+                // Case B: group 无 找平行 → rename 「正铺地砖」 → 「地面找平」 + fill
+                ws.Cell(dirtRow.Row, 2).Value = "地面找平";
+                ws.Cell(dirtRow.Row, 3).Value = floorArea;
+                writeMarker(dirtRow.Row, "【v14 mudiban 客None: 原铺地砖 → 地面找平, 数量=㎡】");
+                handledRows.Add(dirtRow);
+                filled++;
+                Debug($"    [v14 mudiban 客None] 改名行{dirtRow.Row} [原 {dirtRow.Name} → 地面找平] C3={floorArea:F2}");
+            }
+            else
+            {
+                // 🔧 v14.2 fix(reviewer 3): no-cost zero-fill fallback — both 找平 + dirtRow 都 null 时,
+                //   zero-fill ANY IsFloorItem OR DirtSpec-matched row 名 含 「MM/砖/瓷/玻/石/木」 keyword.
+                //   「客 None = 不贴砖」 意图 保留 — 不会 留下 原 实木石砖线 full cost。
+                int zeroFilled = 0;
+                foreach (var candidate in group.Items)
+                {
+                    if (string.IsNullOrEmpty(candidate.Name)) continue;
+                    if (candidate.Name.Contains("找平") || candidate.Name.Contains("保护")) continue;
+                    // 跳过 墙面类 — 保护 IsWallItem 处理 路径 不 被 误清零
+                    if (candidate.Name.Contains("墙面") || candidate.Name.Contains("顶面") || candidate.Name.Contains("乳胶漆")
+                        || candidate.Name.Contains("腻子") || candidate.Name.Contains("基层") || candidate.Name.Contains("勾缝")) continue;
+                    if (!IsFloorItem(candidate.Name, config) && !DirtSpecRegex.IsMatch(candidate.Name)) continue;
+                    if (!candidate.Name.Contains("MM") && !candidate.Name.Contains("砖") && !candidate.Name.Contains("瓷")
+                        && !candidate.Name.Contains("玻") && !candidate.Name.Contains("石") && !candidate.Name.Contains("木")) continue;
+                    ws.Cell(candidate.Row, 3).Value = 0m;
+                    writeMarker(candidate.Row, "【v14 mudiban 客None zero-fill fallback: 未侦地砖行, 0-out 保 「不贴砖」语义】");
+                    handledRows.Add(candidate);
+                    zeroFilled++;
+                    Debug($"    [v14 mudiban 客None zero-fill] 行{candidate.Row} [{candidate.Name}] C3=0");
+                }
+                if (zeroFilled == 0)
+                    Debug($"    [v14 mudiban 客None WARN] group [{group.Name}] 无 找平 + 无 dirtRow + 无 floor-candidate — floor 处理 0 filled");
+                filled += zeroFilled;
+            }
+
+            // 「地面保护」→ C3=0 (mudiban 模板 几乎 都 有 这 row)
+            TemplateItem protectRow = group.Items.FirstOrDefault(i =>
+                !string.IsNullOrEmpty(i.Name) && i.Name.Contains("地面保护"));
+            if (protectRow != null)
+            {
+                ws.Cell(protectRow.Row, 3).Value = 0m;
+                writeMarker(protectRow.Row, "【v14 mudiban 客None: 原地面保护=㎡ → 0, 不贴砖后不需保护】");
+                handledRows.Add(protectRow);
+                filled++;
+                Debug($"    [v14 mudiban 客None] 保护行{protectRow.Row} [地面保护] C3=0 (免保护)");
+            }
+
+            // 其他 墙面 row 正常走 IsWallItem 原 fill wallArea path
+            foreach (var item in group.Items)
+            {
+                if (handledRows.Contains(item)) continue;
+                if (IsWallItem(item.Name, config))
+                {
+                    ws.Cell(item.Row, 3).Value = Math.Round(room.WallArea, 2, MidpointRounding.AwayFromZero);
+                    filled++;
+                    Debug($"    [v14 mudiban 客None] 墙行{item.Row} [{item.Name}] C3={room.WallArea:F2}");
+                }
+            }
+            return filled;
+        }
+
+        // ====================================================================
         // 合计公式: 全表 SUMIF 通配匹配 "小计"
         // ====================================================================
 
@@ -1211,6 +1361,8 @@ namespace BaoJiaCAD
             // 🔧 v6 多楼层选择: 3-key 回退 — k1 主路径(per-floor), k2 全局兑底, k3 老单楼层面板.
             //   "<NONE>" marker → selectedSpecCached=null (mudiban 风格跳过 PHASE A).
             string selectedSpecCached = null;
+            // 🔧 v14 fix: hoist `resolved` to outer scope — v14 mudiban-LR none detection below references it.
+            string resolved = null;
             if (config?.SelectedTileSpecs != null)
             {
                 string floorKey = (room.FloorLevel ?? "").Trim();
@@ -1218,7 +1370,6 @@ namespace BaoJiaCAD
                 string k1 = floorKey + "|" + roomKey;
                 string k2 = "|" + roomKey;
                 string k3 = roomKey;
-                string resolved = null;
                 if (config.SelectedTileSpecs.TryGetValue(k1, out var v1) && !string.IsNullOrEmpty(v1))
                     resolved = v1;
                 else if (config.SelectedTileSpecs.TryGetValue(k2, out var v2) && !string.IsNullOrEmpty(v2))
@@ -1228,6 +1379,25 @@ namespace BaoJiaCAD
                 // 🔧 "<NONE>" → selectedSpecCached=null (mudiban 风格 — 泥板/木地板本奇价格不动).
                 if (resolved != null && resolved != "<NONE>")
                     selectedSpecCached = resolved;
+            }
+            // 🔧 v14 fix: mudiban 模板 + 客餐厅 + "<NONE>" 选 → 「正铺地砖」 转 「地面找平」 + 「地面保护」 C3=0.
+            //   sourceTpl 探测 复式路径 (SelectedFloorTemplates[room.FloorLevel]) + 单层 fallback (config.SelectedTemplate).
+            //   单层 fallback 是 能让 user 提到的「单楼层 UI 选了 mudiban + 客 None」 走上 special 路径 的关键。
+            string sourceTplV14 = "";
+            if (config?.SelectedFloorTemplates != null
+                && !string.IsNullOrWhiteSpace(room?.FloorLevel)
+                && config.SelectedFloorTemplates.TryGetValue(room.FloorLevel ?? "", out var _t14))
+                sourceTplV14 = _t14;
+            else if (!string.IsNullOrEmpty(config?.TemplateSettings?.ActiveTemplate))
+                sourceTplV14 = config.TemplateSettings.ActiveTemplate;
+            bool isLivingRoomNoneMudiban = (resolved == "<NONE>")
+                && _v14TriggerRoomTypes.Contains((room?.RoomType ?? "").Trim())
+                && string.Equals(sourceTplV14, "mudiban", StringComparison.OrdinalIgnoreCase);
+            if (isLivingRoomNoneMudiban)
+            {
+                int n14 = ApplyLivingRoomNoneMudiban(ws, group, room, config);
+                Debug($"    [v14 客None mudiban] 房 [{room.Name}] (RoomType={room.RoomType}) 独有 layout 写完 filled={n14}");
+                return n14;
             }
             foreach (var item in group.Items)
             {

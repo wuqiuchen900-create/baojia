@@ -197,6 +197,26 @@ namespace BaoJiaCAD
                             new TileSpecOption { Label = "正铺 800*1600MM (人工81)",  Value = "sp800-1600-MBR-W", Match = new List<string> { "正铺", "800*1600" }, MaterialPrice = 28.0, LaborPrice = 81.0 },
                             new TileSpecOption { Label = "正铺 900*1800MM (人工91)",  Value = "sp900-1800-MBR-W", Match = new List<string> { "正铺", "900*1800" }, MaterialPrice = 28.0, LaborPrice = 91.0 },
                             new TileSpecOption { Label = "菱铺 300-800MM (人工48)",   Value = "spDiamond-MBR-W",  Match = new List<string> { "菱铺" }, MaterialPrice = 28.0, LaborPrice = 48.0 }
+                        },
+                        // 🔧 v13: 阳台 TileSpec — 阳台 与 客餐厅 共用 tile 体系 (地砖). Value 后缀 -BAL 区分客餐厅.
+                        ["阳台"] = new List<TileSpecOption>
+                        {
+                            new TileSpecOption { Label = "正铺 300-800MM (人工32)",   Value = "sp300-800-BAL",  Match = new List<string> { "正铺", "300-800MM" }, MaterialPrice = 28.0, LaborPrice = 32.0 },
+                            new TileSpecOption { Label = "正铺 600*1200MM (人工48)",  Value = "sp600-1200-BAL", Match = new List<string> { "正铺", "600*1200" }, IsDefault = true, MaterialPrice = 28.0, LaborPrice = 48.0 },
+                            new TileSpecOption { Label = "正铺 750*1500MM (人工71)",  Value = "sp750-1500-BAL", Match = new List<string> { "正铺", "750*1500" }, MaterialPrice = 28.0, LaborPrice = 71.0 },
+                            new TileSpecOption { Label = "正铺 800*1600MM (人工81)",  Value = "sp800-1600-BAL", Match = new List<string> { "正铺", "800*1600" }, MaterialPrice = 28.0, LaborPrice = 81.0 },
+                            new TileSpecOption { Label = "正铺 900*1800MM (人工91)",  Value = "sp900-1800-BAL", Match = new List<string> { "正铺", "900*1800" }, MaterialPrice = 28.0, LaborPrice = 91.0 },
+                            new TileSpecOption { Label = "菱铺 300-800MM (人工48)",   Value = "spDiamond-BAL",  Match = new List<string> { "菱铺" }, MaterialPrice = 28.0, LaborPrice = 48.0 }
+                        },
+                        // 🔧 v13: 外花园 TileSpec — 外花园 与 客餐厅 共用 tile. Value 后缀 -OG.
+                        ["外花园"] = new List<TileSpecOption>
+                        {
+                            new TileSpecOption { Label = "正铺 300-800MM (人工32)",   Value = "sp300-800-OG",  Match = new List<string> { "正铺", "300-800MM" }, MaterialPrice = 28.0, LaborPrice = 32.0 },
+                            new TileSpecOption { Label = "正铺 600*1200MM (人工48)",  Value = "sp600-1200-OG", Match = new List<string> { "正铺", "600*1200" }, IsDefault = true, MaterialPrice = 28.0, LaborPrice = 48.0 },
+                            new TileSpecOption { Label = "正铺 750*1500MM (人工71)",  Value = "sp750-1500-OG", Match = new List<string> { "正铺", "750*1500" }, MaterialPrice = 28.0, LaborPrice = 71.0 },
+                            new TileSpecOption { Label = "正铺 800*1600MM (人工81)",  Value = "sp800-1600-OG", Match = new List<string> { "正铺", "800*1600" }, MaterialPrice = 28.0, LaborPrice = 81.0 },
+                            new TileSpecOption { Label = "正铺 900*1800MM (人工91)",  Value = "sp900-1800-OG", Match = new List<string> { "正铺", "900*1800" }, MaterialPrice = 28.0, LaborPrice = 91.0 },
+                            new TileSpecOption { Label = "菱铺 300-800MM (人工48)",   Value = "spDiamond-OG",  Match = new List<string> { "菱铺" }, MaterialPrice = 28.0, LaborPrice = 48.0 }
                         }
                     }
                 }

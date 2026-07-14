@@ -526,6 +526,130 @@
           "materialPrice": 28.0,
           "laborPrice": 48.0
         }
+      ],
+      "阳台": [
+        {
+          "label": "正铺 300-800MM (人工32)",
+          "value": "sp300-800-BAL",
+          "match": [
+            "正铺",
+            "300-800MM"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 32.0
+        },
+        {
+          "label": "正铺 600*1200MM (人工48)",
+          "value": "sp600-1200-BAL",
+          "match": [
+            "正铺",
+            "600*1200"
+          ],
+          "isDefault": true,
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        },
+        {
+          "label": "正铺 750*1500MM (人工71)",
+          "value": "sp750-1500-BAL",
+          "match": [
+            "正铺",
+            "750*1500"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 71.0
+        },
+        {
+          "label": "正铺 800*1600MM (人工81)",
+          "value": "sp800-1600-BAL",
+          "match": [
+            "正铺",
+            "800*1600"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 81.0
+        },
+        {
+          "label": "正铺 900*1800MM (人工91)",
+          "value": "sp900-1800-BAL",
+          "match": [
+            "正铺",
+            "900*1800"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 91.0
+        },
+        {
+          "label": "菱铺 300-800MM (人工48)",
+          "value": "spDiamond-BAL",
+          "match": [
+            "菱铺"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        }
+      ],
+      "外花园": [
+        {
+          "label": "正铺 300-800MM (人工32)",
+          "value": "sp300-800-OG",
+          "match": [
+            "正铺",
+            "300-800MM"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 32.0
+        },
+        {
+          "label": "正铺 600*1200MM (人工48)",
+          "value": "sp600-1200-OG",
+          "match": [
+            "正铺",
+            "600*1200"
+          ],
+          "isDefault": true,
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        },
+        {
+          "label": "正铺 750*1500MM (人工71)",
+          "value": "sp750-1500-OG",
+          "match": [
+            "正铺",
+            "750*1500"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 71.0
+        },
+        {
+          "label": "正铺 800*1600MM (人工81)",
+          "value": "sp800-1600-OG",
+          "match": [
+            "正铺",
+            "800*1600"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 81.0
+        },
+        {
+          "label": "正铺 900*1800MM (人工91)",
+          "value": "sp900-1800-OG",
+          "match": [
+            "正铺",
+            "900*1800"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 91.0
+        },
+        {
+          "label": "菱铺 300-800MM (人工48)",
+          "value": "spDiamond-OG",
+          "match": [
+            "菱铺"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        }
       ]
     }
   },
