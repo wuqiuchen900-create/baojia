@@ -1,0 +1,11 @@
+E:\xiangmu\baojia\BaoJiaConfigEditor\obj\Debug\net48\BaoJiaConfigEditor.csproj.AssemblyReference.cache
+E:\xiangmu\baojia\BaoJiaConfigEditor\obj\Debug\net48\BaoJiaConfigEditor.GeneratedMSBuildEditorConfig.editorconfig
+E:\xiangmu\baojia\BaoJiaConfigEditor\obj\Debug\net48\BaoJiaConfigEditor.csproj.CoreCompileInputs.cache
+E:\xiangmu\baojia\BaoJiaConfigEditor\obj\Debug\net48\BaoJiaConfigEditor.sourcelink.json
+E:\xiangmu\baojia\BaoJiaConfigEditor\bin\Debug\net48\BaoJiaCAD.ConfigEditor.exe.config
+E:\xiangmu\baojia\BaoJiaConfigEditor\bin\Debug\net48\BaoJiaCAD.ConfigEditor.exe
+E:\xiangmu\baojia\BaoJiaConfigEditor\bin\Debug\net48\BaoJiaCAD.ConfigEditor.pdb
+E:\xiangmu\baojia\BaoJiaConfigEditor\bin\Debug\net48\Newtonsoft.Json.dll
+E:\xiangmu\baojia\BaoJiaConfigEditor\obj\Debug\net48\BaoJiaCo.B8B4AE5E.Up2Date
+E:\xiangmu\baojia\BaoJiaConfigEditor\obj\Debug\net48\BaoJiaCAD.ConfigEditor.exe
+E:\xiangmu\baojia\BaoJiaConfigEditor\obj\Debug\net48\BaoJiaCAD.ConfigEditor.pdb

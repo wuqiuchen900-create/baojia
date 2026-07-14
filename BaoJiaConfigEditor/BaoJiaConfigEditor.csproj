@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>BaoJiaCAD.ConfigEditor</AssemblyName>
+    <RootNamespace>BaoJiaCAD.ConfigEditor</RootNamespace>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>8.0</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- 🔧 PublishSingleFile  不动了 net48 不被支持 (NETSDK1125)。发行采用 "EXE + Newtonsoft.Json.dll" 两件套 拷到 BaoJiaConfigEditor/dist\ 计划 。要杀匚一秒 .exe 唯一单件，需迁 net8.0-windows (重构较大)。 -->
+    <!-- 想迁 net8 时 只需 uncomment 以下 3 行:
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- File Link: 复用主项目的 QuoteConfig.cs (含 QuoteConfig / RoomTypeMap / QuoteItemConfig / BathroomKitchenDefaults / TemplateSettingsConfig / TileSpecOption 共 6 个类型). 不引用主项目 csproj, 避免引入 AutoCAD 依赖. -->
+    <Compile Include="..\BaoJiaCAD\QuoteConfig.cs" Link="QuoteConfig.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+</Project>
