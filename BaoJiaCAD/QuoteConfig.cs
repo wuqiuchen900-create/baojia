@@ -31,11 +31,27 @@ namespace BaoJiaCAD
         public BathroomKitchenDefaults BathroomKitchenDefaults { get; set; } = new BathroomKitchenDefaults();
 
         /// <summary>
-        /// 本次报价运行时用户选的瓷砖规格 (roomType -> spec.Value). 由 Commands 从面板写入, ExcelExporter 读取.
-        /// 不会被 Save() (不持久化, 每次 BJ 重填).
+        /// 本次报价运行时用户选的瓷砖规格 (由 Commands 从面板写入, ExcelExporter 读取; 不持久化).
+        /// 键编码 (ExcelExporter.FillRoomData 中按以下优先级回退查找 k1 → k2 → k3):
+        ///   k1 (主路径) — v6 多楼层: "{FloorLevel}|{RoomType}" (e.g. "一楼|客餐厅"). 同 层同房 间 没填 → 走 k2.
+        ///   k2 (全局兑底) — "|{RoomType}" (e.g. "|客餐厅"). 没填 → 走 k3.
+        ///   k3 (向后兼容) — v5 老版单楼层面板 只有 {RoomType} (e.g. "客餐厅"). 仍生效.
+        /// 值规则: panel.GetTileSpecSelections() 输出的是 spec.Value (e.g. "sp750-1500-LR") 或
+        ///         面板中选的 NONE 选项("&lt;NONE&gt;") — 看到 "<NONE>" ExcelExporter 会 将 selectedSpecCached=null, 跳过 PHASE A.
         /// </summary>
         [JsonIgnore]
         public Dictionary<string, string> SelectedTileSpecs { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// 🔧 v7 本次报价运行时 用户面板选的 各层 模板 (复式跨层模板混合, e.g. 1F=dizhuan / 2F=mudiban / 3F=dizhuan).
+        /// 键: 楼层别名 (e.g. "一楼", "二楼", "三楼", ..., "九楼" — 与 QuotePanel._floorAliases 同步).
+        /// 值: config.TemplateSettings.Templates 字典 的 key (e.g. "dizhuan", "mudiban", "fushi", "zhubaojiao").
+        /// 由 Commands 从面板写入, ExcelExporter 读取 — 用于每层独立加载对应 xlsx + 克隆 prototype.
+        /// 单层 (IsMultiFloor=false) 时 不使用, 走原 _cmbTemplate 全局单模板.
+        /// 不会被 Save() (不持久化, 每次 BJ 重填).
+        /// </summary>
+        [JsonIgnore]
+        public Dictionary<string, string> SelectedFloorTemplates { get; set; } = new Dictionary<string, string>();
 
         /// <summary>
         /// 从 JSON 文件加载配置
@@ -97,6 +113,8 @@ namespace BaoJiaCAD
                     new RoomTypeMap { Keywords = new List<string> { "花园", "露台", "庭院", "天井", "花池", "花坛" }, RoomType = "外花园" },
                     new RoomTypeMap { Keywords = new List<string> { "客餐厅", "客厅", "餐厅", "楼梯", "起居", "门厅", "玄关", "过道", "走廊", "入户", "堂屋", "阁楼", "地下室", "吧台", "家庭厅", "阳光房" }, RoomType = "客餐厅" },
                     new RoomTypeMap { Keywords = new List<string> { "阳台" }, RoomType = "阳台" },
+                    // 🔧 v11: 主卫 RoomTypeMap 必须在 卫生间 之前 — ClassifyRoom first-match-wins, "主卧卫生间" 类房间归主卫 bucket 而非公卫.
+                    new RoomTypeMap { Keywords = new List<string> { "主卫", "主卧内卫", "主卧卫生间", "主人卫生间" }, RoomType = "主卫" },
                     new RoomTypeMap { Keywords = new List<string> { "卫", "厕所", "洗手间" }, RoomType = "卫生间" },
                     new RoomTypeMap { Keywords = new List<string> { "厨" }, RoomType = "厨房" },
                     // 🔧 主卧 RoomTypeMap 必须在 卧室 之前 — ClassifyRoom first-match-wins,
@@ -150,7 +168,9 @@ namespace BaoJiaCAD
                         // 🔧 主卧 fallback 到 客餐厅: 有模板 没主卧 group 时 默认都走 客餐厅 prototype
                         //   (eg dizhuan/mudiban 模板只有客餐厅 + 厨房 之类, 不会混主卧). 主床 / 主卫 错配会静默隐除.
                         // 若未来 dizhuan 模板加上了 主卧/主卫 独立 group, 可以从 config.json 删除该行.
-                        { "主卧", "客餐厅" }
+                        { "主卧", "客餐厅" },
+                        // 🔧 v11: 主卫 fallback 到 卫生间 — dizhuan/mudiban 模板没独立主卫 group, 共用「二 卫生间」 prototype. 主卫 rooms 仍会用「卫生间」 group 克隆.
+                        { "主卫", "卫生间" }
                     },
                     FloorItemKeywords = new List<string> { "地面保护", "铺地砖", "地砖", "地板", "正铺" },
                     WallItemKeywords = new List<string> { "墙顶面基层加固", "墙面基层处理", "鸟巢腻子", "芬琳芬华", "五合一", "内墙乳胶漆" },
@@ -167,6 +187,16 @@ namespace BaoJiaCAD
                             new TileSpecOption { Label = "正铺 800*1600MM (人工81)",  Value = "sp800-1600", Match = new List<string> { "正铺", "800*1600" } },
                             new TileSpecOption { Label = "正铺 900*1800MM (人工91)",  Value = "sp900-1800", Match = new List<string> { "正铺", "900*1800" } },
                             new TileSpecOption { Label = "菱铺 300-800MM (人工48)",   Value = "spDiamond",  Match = new List<string> { "菱铺" } }
+                        },
+                        // 🔧 v11: 主卫 TileSpec — 主卫 与客餐厅 共用 tile 体系 (master bath 贴地砖). Value 后缀 -MBR-W 区分主卫 (避免与客餐厅 spec value 撞).
+                        ["主卫"] = new List<TileSpecOption>
+                        {
+                            new TileSpecOption { Label = "正铺 300-800MM (人工32)",   Value = "sp300-800-MBR-W",  Match = new List<string> { "正铺", "300-800MM" }, IsDefault = true },
+                            new TileSpecOption { Label = "正铺 600*1200MM (人工48)",  Value = "sp600-1200-MBR-W", Match = new List<string> { "正铺", "600*1200" }, MaterialPrice = 28.0, LaborPrice = 48.0 },
+                            new TileSpecOption { Label = "正铺 750*1500MM (人工71)",  Value = "sp750-1500-MBR-W", Match = new List<string> { "正铺", "750*1500" }, MaterialPrice = 28.0, LaborPrice = 71.0 },
+                            new TileSpecOption { Label = "正铺 800*1600MM (人工81)",  Value = "sp800-1600-MBR-W", Match = new List<string> { "正铺", "800*1600" }, MaterialPrice = 28.0, LaborPrice = 81.0 },
+                            new TileSpecOption { Label = "正铺 900*1800MM (人工91)",  Value = "sp900-1800-MBR-W", Match = new List<string> { "正铺", "900*1800" }, MaterialPrice = 28.0, LaborPrice = 91.0 },
+                            new TileSpecOption { Label = "菱铺 300-800MM (人工48)",   Value = "spDiamond-MBR-W",  Match = new List<string> { "菱铺" }, MaterialPrice = 28.0, LaborPrice = 48.0 }
                         }
                     }
                 }

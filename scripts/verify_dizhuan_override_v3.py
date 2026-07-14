@@ -411,3 +411,251 @@ def s12():
 
 for fn in (s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12):
     fn()
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 🔧 v6 多楼层选择场景 (S13–S17) — mirror of ExcelExporter 3-key fallback
+#   k1 = "{Floor}|{Room}" 主路径
+#   k2 = "|{Room}"     全局兜底
+#   k3 = "{Room}"      老版单楼层面板路径 (向后兼容)
+#   "<NONE>" → selected_spec=None → mudiban 风格跳过 PHASE A
+# ════════════════════════════════════════════════════════════════════════
+NONE_SPEC = "<NONE>"
+
+
+def lookup_spec(floor_level, room_type, specs_by_key):
+    """Mirror of ExcelExporter FixFillRoomData 3-key lookup. Returns spec-value or None."""
+    if not specs_by_key:
+        return None
+    k1 = f"{(floor_level or '').strip()}|{(room_type or '').strip()}"
+    k2 = f"|{(room_type or '').strip()}"
+    k3 = (room_type or '').strip()
+    for k in (k1, k2, k3):
+        v = specs_by_key.get(k)
+        if v is None:
+            continue
+        return None if v == NONE_SPEC else v
+    return None
+
+
+def fill_row_per_floor(item, room_type, floor_level, specs_by_key, *, group_items=None, item_formulas_key=None):
+    """v6 sim helper — does 3-key lookup then dispatches to fill_row."""
+    selected_spec = lookup_spec(floor_level, room_type, specs_by_key)
+    return fill_row(item, room_type, selected_spec,
+                     group_items=group_items, item_formulas_key=item_formulas_key)
+
+
+def s13():
+    banner("S13  v6 — 1F=sp750-1500-LR + 2F=<NONE> + 3F=sp600-1200-LR per-floor PHASE A gating")
+    specs_by_key = {
+        "\u4e00\u697c|\u5ba2\u9910\u5385": "sp750-1500",   # v6 主路径 per-floor 主选择 — 该等 spec 必须存在于 config.TileSpecOptions["客餐厅"]
+        "\u4e8c\u697c|\u5ba2\u9910\u5385": NONE_SPEC,       # 走 mudiban 兜底
+        "\u4e09\u697c|\u5ba2\u9910\u5385": "sp600-1200-LR",  # 与 1F 不同
+    }
+    expected = {
+        "\u4e00\u697c": ("\u6b63\u94fa\u5730\u7816\uff08750*1500MM\uff09", 28, 71),
+        "\u4e8c\u697c": (None, None, None),  # NONE → mudiban-style skip
+        "\u4e09\u697c": ("\u6b63\u94fa\u5730\u7816\uff08600*1200MM\uff09", 28, 48),
+    }
+    fail = 0
+    for fl, (exp_c2, exp_c5, exp_c7) in expected.items():
+        item = {"Name": "\u5ba2\u5385\u53ca\u9910\u5385\u6b63\u94fa\u5730\u7816\uff08600*1200MM\uff09",
+                "C9": "...", "__floor": 18.0}
+        r = fill_row_per_floor(item, "\u5ba2\u9910\u5385", fl, specs_by_key, group_items=[item])
+        pa = r.get("phaseA") or {}
+        if exp_c2 is None:
+            ok = ("C5" not in pa and "C7" not in pa and "C2" not in pa)
+        else:
+            ok = (pa.get("C2") == exp_c2 and pa.get("C5") == exp_c5 and pa.get("C7") == exp_c7)
+        ok_lookup = (lookup_spec(fl, "\u5ba2\u9910\u5385", specs_by_key) is not None
+                     if exp_c2 is not None
+                     else lookup_spec(fl, "\u5ba2\u9910\u5385", specs_by_key) is None)
+        if not (ok and ok_lookup):
+            fail += 1
+            print(f"    -> FAIL  fl={fl} pa={pa}")
+        else:
+            tag = "MUDIBAN-SKIP" if exp_c2 is None else "PHASE A fired"
+            print(f"    -> PASS  fl={fl}  ({tag})")
+    print(f"  S13 fail_count={fail}  expected=0")
+
+
+def s14():
+    banner("S14  v6 — only '|客餐厅' global fallback → 所有楼层继承")
+    specs_by_key = {"|\u5ba2\u9910\u5385": "sp300-800-LR"}
+    fail = 0
+    for fl in ("\u4e00\u697c", "\u4e8c\u697c", "\u4e09\u697c"):
+        item = {"Name": "\u5ba2\u5385\u53ca\u9910\u5385\u6b63\u94fa\u5730\u7816\uff08600*1200MM\uff09",
+                "C9": "...", "__floor": 18.0}
+        r = fill_row_per_floor(item, "\u5ba2\u9910\u5385", fl, specs_by_key, group_items=[item])
+        pa = r.get("phaseA") or {}
+        exp_c2 = "\u6b63\u94fa\u5730\u7816\uff08300-800MM\uff09"
+        ok = pa.get("C2") == exp_c2 and pa.get("C5") == 28 and pa.get("C7") == 32
+        if not ok:
+            fail += 1
+            print(f"    -> FAIL  fl={fl} pa={pa}")
+        else:
+            print(f"    -> PASS  fl={fl}  inherited sp300-800-LR")
+    print(f"  S14 fail_count={fail}  expected=0")
+
+
+def s15():
+    banner("S15  v6 — 一楼客餐厅=<NONE> → 即便 item isExact 也跳过 PHASE A")
+    item = {"Name": "\u5ba2\u5385\u53ca\u9910\u5385\u6b63\u94fa\u5730\u7816\uff08600*1200MM\uff09",
+            "C9": "...", "__floor": 18.0}
+    specs_by_key = {"\u4e00\u697c|\u5ba2\u9910\u5385": NONE_SPEC}
+    r = fill_row_per_floor(item, "\u5ba2\u9910\u5385", "\u4e00\u697c", specs_by_key, group_items=[item])
+    pa = r.get("phaseA") or {}
+    ok = "C5" not in pa and "C7" not in pa and "C2" not in pa
+    check("NONE_shortcircuit", ok, "no C5/C7/C2 changes (mudiban-style suppression)")
+    print(f"    phaseA={pa}  (empty == must be empty for NONE)")
+
+
+def s16():
+    banner("S16  v6 — backward compat: 老 k3 = '客餐厅' 单 key (无 |{}) 仍生效")
+    item = {"Name": "\u5ba2\u5385\u53ca\u9910\u5385\u6b63\u94fa\u5730\u7816\uff08600*1200MM\uff09",
+            "C9": "...", "__floor": 18.0}
+    specs_by_key = {"\u5ba2\u9910\u5385": "sp750-1500"}  # 仅 k3 — 该值必存在于 config.TileSpecOptions["客餐厅"]
+    # floor=四楼 — k1 miss, k2 miss (没 '\|客餐厅'), k3 hit
+    r = fill_row_per_floor(item, "\u5ba2\u9910\u5385", "\u56db\u697c", specs_by_key, group_items=[item])
+    pa = r.get("phaseA") or {}
+    exp_c2 = "\u6b63\u94fa\u5730\u7816\uff08750*1500MM\uff09"
+    ok = pa.get("C2") == exp_c2 and pa.get("C5") == 28 and pa.get("C7") == 71
+    if not ok:
+        print(f"    DEBUG phaseA={pa}")
+    check("k3_legacy", ok, f"C2={exp_c2} C5=28 C7=71 (backward compat)")
+
+
+def s17():
+    """v6 3-key priority chain — 拆分两路:
+
+    s17a: 同时存在 k1+k2+k3 时, k2 会 在 七楼 命中（不是 k3） — 验证 k1>k2 的优先级.
+    s17b: 仅存在 k3 时（无 k1, 无 k2）, 验证 k3 兑底.
+    """
+    banner("S17a v6 — k1 > k2 priority (k1,k2 同存)")
+    item = {"Name": "\u5ba2\u5385\u53ca\u9910\u5385\u6b63\u94fa\u5730\u7816\uff08600*1200MM\uff09",
+            "C9": "...", "__floor": 18.0}
+    specs_with_k2 = {
+        "\u4e00\u697c|\u5ba2\u9910\u5385": "sp750-1500",     # k1 必须存在于 config
+        "|\u5ba2\u9910\u5385":             "sp300-800-LR",
+        "\u5ba2\u9910\u5385":              "sp900-1800-LR",  # k3 不被访问 (k2 先命中)
+    }
+    # 1F: k1 hit
+    r = fill_row_per_floor(item, "\u5ba2\u9910\u5385", "\u4e00\u697c", specs_with_k2, group_items=[item])
+    pa_1f = r.get("phaseA") or {}
+    # 2F: k1 miss, k2 hit
+    r = fill_row_per_floor(item, "\u5ba2\u9910\u5385", "\u4e8c\u697c", specs_with_k2, group_items=[item])
+    pa_2f = r.get("phaseA") or {}
+    # 7F: k1 miss, k2 hit (还没轮到 k3)
+    r = fill_row_per_floor(item, "\u5ba2\u9910\u5385", "\u4e03\u697c", specs_with_k2, group_items=[item])
+    pa_7f = r.get("phaseA") or {}
+    print(f"    1F C7={pa_1f.get('C7')} (expect 71 from k1)")
+    print(f"    2F C7={pa_2f.get('C7')} (expect 32 from k2)")
+    print(f"    7F C7={pa_7f.get('C7')} (expect 32 from k2; k3 不參加)")
+    ok_a = pa_1f.get("C7") == 71 and pa_2f.get("C7") == 32 and pa_7f.get("C7") == 32
+    check("s17a_k1_gt_k2", ok_a, "1F=k1, 2F=k2, 7F=k2 too")
+
+    banner("S17b v6 — k3 fallback fires when k1,k2 both miss")
+    specs_k3_only = {
+        "\u4e00\u697c|\u5ba2\u9910\u5385": "sp750-1500",     # k1 hit on 1F
+        "\u5ba2\u9910\u5385":              "sp900-1800-LR",  # k3 (no k2 存在)
+    }
+    # 7F: k1 miss (没 七楼|客餐厅), k2 miss (没 |客餐厅), k3 hit (客餐厅)
+    r = fill_row_per_floor(item, "\u5ba2\u9910\u5385", "\u4e03\u697c", specs_k3_only, group_items=[item])
+    pa_7f_b = r.get("phaseA") or {}
+    print(f"    7F (k3 only) C7={pa_7f_b.get('C7')} (expect 91)")
+    ok_b = pa_7f_b.get("C7") == 91
+    check("s17b_k3_fallback", ok_b, "k3 fallback fires when k1,k2 absent")
+
+
+for fn in (s13, s14, s15, s16, s17):
+    fn()
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 🔧 v7 per-floor template selection 场景 (S18–S20) — mirror of ExcelExporter
+#   LookupSourceTemplateForFloor + ResolveTemplates(sourceTpl, floor, type) 三维查找
+#   - S18: 1F=dizhuan + 2F=mudiban + 1F|客=sp750-1500 + 2F|客=NONE — 验证 per-floor 路由
+#   - S19: 4F 全部 mudiban + 全 NONE — 验证全 mudiban 走兑底
+#   - S20: 4F 交替 dizhuan/mudiban + specs 交替 — 验证多层混合
+# ════════════════════════════════════════════════════════════════════════
+
+
+def lookup_source_template(floor_level, selected_floor_templates):
+    """Mirror of ExcelExporter.LookupSourceTemplateForFloor — 根据房间楼层查该层选了什么 xlsx 模板."""
+    if not selected_floor_templates or not floor_level:
+        return ""
+    return selected_floor_templates.get(floor_level, "")
+
+
+def s18():
+    banner("S18  v7 — 1F=dizhuan + 2F=mudiban + 1F|客=sp750-1500 + 2F|客=NONE — per-floor 路由")
+    selected_floor_tpls = {"\u4e00\u697c": "dizhuan", "\u4e8c\u697c": "mudiban"}
+    specs_by_key = {
+        "\u4e00\u697c|\u5ba2\u9910\u5385": "sp750-1500",     # k1 — 1F 走 dizhuan + sp750-1500
+        "\u4e8c\u697c|\u5ba2\u9910\u5385": NONE_SPEC,        # 2F 走 mudiban + NONE
+    }
+    tpl_1f = lookup_source_template("\u4e00\u697c", selected_floor_tpls)
+    tpl_2f = lookup_source_template("\u4e8c\u697c", selected_floor_tpls)
+    spec_1f = lookup_spec("\u4e00\u697c", "\u5ba2\u9910\u5385", specs_by_key)
+    spec_2f = lookup_spec("\u4e8c\u697c", "\u5ba2\u9910\u5385", specs_by_key)
+    ok_tpl = tpl_1f == "dizhuan" and tpl_2f == "mudiban"
+    ok_spec = spec_1f == "sp750-1500" and spec_2f is None  # NONE → None
+    if ok_tpl and ok_spec:
+        print("    -> PASS  1F=\u5ba2\u9910\u5385 \u2192 dizhuan + sp750-1500  (PHASE A \u706b)")
+        print("    -> PASS  2F=\u5ba2\u9910\u5385 \u2192 mudiban + NONE       (PHASE A \u8df3)")
+    else:
+        print(f"    -> FAIL  tpl_1f={tpl_1f} tpl_2f={tpl_2f} spec_1f={spec_1f} spec_2f={spec_2f}")
+
+
+def s19():
+    banner("S19  v7 — 4F 全部 mudiban + 全 NONE — 全 mudiban 兑底 (无 PHASE A)")
+    selected_floor_tpls = {
+        "\u4e00\u697c": "mudiban", "\u4e8c\u697c": "mudiban",
+        "\u4e09\u697c": "mudiban", "\u56db\u697c": "mudiban",
+    }
+    specs_by_key = {}  # 一项 specs 都没选 — 全走 mudiban 原型不动
+    fail = 0
+    for fl in ("\u4e00\u697c", "\u4e8c\u697c", "\u4e09\u697c", "\u56db\u697c"):
+        tpl = lookup_source_template(fl, selected_floor_tpls)
+        spec = lookup_spec(fl, "\u5ba2\u9910\u5385", specs_by_key)
+        if tpl == "mudiban" and spec is None:
+            print(f"    -> PASS  fl={fl}  tpl=mudiban  spec=None")
+        else:
+            fail += 1
+            print(f"    -> FAIL  fl={fl}  tpl={tpl}  spec={spec}")
+    print(f"  S19 fail_count={fail}  expected=0")
+
+
+def s20():
+    banner("S20  v7 — 4F 交替 dizhuan/mudiban + specs 交替 — 多层混合")
+    selected_floor_tpls = {
+        "\u4e00\u697c": "dizhuan", "\u4e8c\u697c": "mudiban",
+        "\u4e09\u697c": "dizhuan", "\u56db\u697c": "mudiban",
+    }
+    specs_by_key = {
+        "\u4e00\u697c|\u5ba2\u9910\u5385": "sp750-1500",      # dizhuan + \u5927\u7816
+        "\u4e8c\u697c|\u5ba2\u9910\u5385": NONE_SPEC,         # mudiban + \u4e0d\u52a8
+        "\u4e09\u697c|\u5ba2\u9910\u5385": "sp600-1200-LR",  # dizhuan + \u4e2d\u7816
+        "\u56db\u697c|\u5ba2\u9910\u5385": NONE_SPEC,         # mudiban + \u4e0d\u52a8
+    }
+    expected = [
+        ("\u4e00\u697c", "dizhuan",      "sp750-1500"),
+        ("\u4e8c\u697c", "mudiban",      None),
+        ("\u4e09\u697c", "dizhuan",      "sp600-1200-LR"),
+        ("\u56db\u697c", "mudiban",      None),
+    ]
+    fail = 0
+    for fl, exp_tpl, exp_spec in expected:
+        got_tpl = lookup_source_template(fl, selected_floor_tpls)
+        got_spec = lookup_spec(fl, "\u5ba2\u9910\u5385", specs_by_key)
+        if got_tpl == exp_tpl and got_spec == exp_spec:
+            tag = "PHASE A \u706b" if got_spec else "PHASE A \u8df3"
+            print(f"    -> PASS  fl={fl}  tpl={got_tpl:8s}  spec={str(got_spec or 'None'):16s}  ({tag})")
+        else:
+            fail += 1
+            print(f"    -> FAIL  fl={fl}  got tpl={got_tpl} spec={got_spec}  expected tpl={exp_tpl} spec={exp_spec}")
+    print(f"  S20 fail_count={fail}  expected=0")
+
+
+for fn in (s18, s19, s20):
+    fn()

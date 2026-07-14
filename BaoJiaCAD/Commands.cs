@@ -19,7 +19,8 @@ namespace BaoJiaCAD
     /// </summary>
     public class Commands
     {
-        private static readonly string[] FloorAliases = { "一楼", "二楼", "三楼", "四楼", "五楼" };
+        // 🔧 v7 修复: 5 → 9 层同步 QuotePanel._floorAliases. 否则复式层 = 6/7/8/9 时 FloorAliases[floorIdx] 引发 IndexOutOfRangeException.
+        private static readonly string[] FloorAliases = { "一楼", "二楼", "三楼", "四楼", "五楼", "六楼", "七楼", "八楼", "九楼" };
 
         /// <summary>
         /// 一键报价命令（面板输入参数 + 框选房间识别 + 导出 Excel）
@@ -63,6 +64,17 @@ namespace BaoJiaCAD
                     editor.WriteMessage($"\n[规格] 用户面板选 {config.SelectedTileSpecs.Count} 个类别:");
                     foreach (var kv in config.SelectedTileSpecs)
                         editor.WriteMessage($"\n[规格]   {kv.Key} -> {kv.Value}");
+                }
+
+                // 🔧 v7 面板每层 模板 回写到 config.SelectedFloorTemplates
+                //   - 单层返空 dict, ExcelExporter 走原 _cmbTemplate 单路径
+                //   - 复式返 floor→templateName, ExcelExporter 按 (floor, roomType) 加载对应 xlsx
+                config.SelectedFloorTemplates = panel.GetFloorTemplateSelections();
+                if (config.SelectedFloorTemplates.Count > 0)
+                {
+                    editor.WriteMessage($"\n[模板] v7 复式 每层 模板:");
+                    foreach (var kv in config.SelectedFloorTemplates)
+                        editor.WriteMessage($"\n[模板]   {kv.Key} -> {kv.Value}");
                 }
 
                 // 5. 循环识别每层
@@ -151,6 +163,47 @@ namespace BaoJiaCAD
 
                 string templatePath = GetTemplatePath(config, isMultiFloor, overrideTemplate, editor);
 
+                // 🔧 v7: 复式 + 面板每层选不同模板时, 按 floor 走各层 xlsx 路径. 主模板路径 (输出 wb 背景) = 1F 的路径.
+                //   - isMultiFloor==false 或 SelectedFloorTemplates 空 → 走 v6 单模板路径
+                //   - 复式 + 每层都选同一模板 (变同名字典, 重复) → 也走 v6 路径 (ParseTemplate 拿到全部)
+                //   - 复式 + 多层 不同模板 → 走 v7 多模板路径
+                string primaryTemplateName = overrideTemplate;
+                Dictionary<string, string> floorTemplatePaths = new Dictionary<string, string>();
+                if (isMultiFloor && config.SelectedFloorTemplates != null && config.SelectedFloorTemplates.Count > 0)
+                {
+                    foreach (var kv in config.SelectedFloorTemplates)
+                    {
+                        var perFloorPath = GetSpecificTemplatePath(config, kv.Value, editor);
+                        if (!string.IsNullOrEmpty(perFloorPath))
+                            floorTemplatePaths[kv.Key] = perFloorPath;
+                    }
+                    // 主模板 = 1F 的路径 (或第一可用层)
+                    string oneFAlias = FloorAliases != null && FloorAliases.Length > 0 ? FloorAliases[0] : "一楼";
+                    if (floorTemplatePaths.TryGetValue(oneFAlias, out var oneFPath))
+                    {
+                        templatePath = oneFPath;
+                        primaryTemplateName = config.SelectedFloorTemplates.TryGetValue(oneFAlias, out var oneFTpl) ? oneFTpl : overrideTemplate;
+                    }
+                    else if (floorTemplatePaths.Count > 0)
+                    {
+                        // 1F 面板未选, 但其他层选了 — 抩一个能用的
+                        KeyValuePair<string, string> firstKv = default;
+                        bool got = false;
+                        foreach (var kvp in floorTemplatePaths) { firstKv = kvp; got = true; break; }
+                        if (got)
+                        {
+                            templatePath = firstKv.Value;
+                            primaryTemplateName = config.SelectedFloorTemplates.TryGetValue(firstKv.Key, out var fbTpl) ? fbTpl : overrideTemplate;
+                        }
+                    }
+                    if (floorTemplatePaths.Count > 1)
+                    {
+                        editor.WriteMessage($"\n[模板] v7 复式 多模板混合: {floorTemplatePaths.Count} 层各自加载路径:");
+                        foreach (var kv in floorTemplatePaths)
+                            editor.WriteMessage($"\n[模板]   {kv.Key} -> {Path.GetFileName(kv.Value)}");
+                    }
+                }
+
                 // 走法 C: 6 大类归纳面板（在 Excel 导出前展示给用户）
                 // 外花园卷材防水互斥面板：Y/N 选择后写入 Room.IsWaterproofedRoll + OutdoorGardenFormulas
                 if (!CategoryPanel.AskOuterGardenWaterproof(editor, allRooms, config))
@@ -164,13 +217,32 @@ namespace BaoJiaCAD
 
                 var exporter = new ExcelExporter();
                 exporter.Log = msg => editor.WriteMessage($"\n[报价] {msg}");
-                exporter.Export(allRooms, projectName, templatePath, outputPath, config);
+                exporter.Export(allRooms, projectName, templatePath, primaryTemplateName, floorTemplatePaths, outputPath, config);
 
                 editor.WriteMessage($"\n报价单已生成：{outputPath}");
                 editor.WriteMessage($"\n共识别 {allRooms.Count} 个房间（{(isMultiFloor ? floorCount : 1)} 层）。");
             }
             catch (System.Exception ex)
             {
+                // 🔧 诊断模式 v4 (Round 3 总结): 完整 [ERROR-DIAG] dump 到 F2 trace + dialog 顶部携前 3 帧 stack.
+                //   前 3 轮我瞎猜没点到 NRE 真正的 source line. 本轮 让用户复现一次 同时 dump 到 dialog 顶部 (用户不看 F2 也能抓住源) + F2 trace 供深度分析.
+                //   重测后 请 复制 dialog 文本 或 F2 里 [ERROR-DIAG] 到下条 block 贴回来 — 就能明确 定位 NRE origin 上线.
+                editor.WriteMessage("\n========== [ERROR-DIAG] ==========");
+                editor.WriteMessage($"\n[ERROR-DIAG] ExceptionType: {ex.GetType().FullName}");
+                editor.WriteMessage($"\n[ERROR-DIAG] Message: {ex.Message ?? "<null>"}");
+                editor.WriteMessage($"\n[ERROR-DIAG] TargetSite: {ex.TargetSite?.ToString() ?? "<null>"}");
+                editor.WriteMessage("\n[ERROR-DIAG] Stack:");
+                editor.WriteMessage($"\n{ex.StackTrace ?? "<null>"}");
+                // 内层异常链 限深 5 层 — 防 罕见自环 无限循环 (例 ObjectDisposedException chain).
+                // 🔧 必须前 缀 System.Exception — Autodesk.AutoCAD.Runtime 也有 Exception 类, 不前 缀 编译 报歧义.
+                System.Exception inner = ex.InnerException;
+                for (int depth = 0; depth < 5 && inner != null; depth++, inner = inner.InnerException)
+                {
+                    editor.WriteMessage($"\n[ERROR-DIAG] -- Inner[{depth}]: {inner.GetType().FullName}: {inner.Message ?? "<null>"}");
+                    editor.WriteMessage($"\n[ERROR-DIAG] -- Inner[{depth}] Stack:");
+                    editor.WriteMessage($"\n{inner.StackTrace ?? "<null>"}");
+                }
+                editor.WriteMessage("\n====================================");
                 editor.WriteMessage($"\n发生错误：{ex.Message}");
                 // 根因子未起到定位作用（如 “Exception of type 'X' was thrown”）时透出底层 .InnerException.Message
                 // 简化判定：外层 message 信息不足（如 "Exception of type 'X' was thrown."）一律穿透到 InnerException.Message.
@@ -179,10 +251,19 @@ namespace BaoJiaCAD
                     && !ex.Message.StartsWith("Exception of type")
                     ? ex.Message
                     : (ex.InnerException?.Message ?? ex.Message);
-                // 友好弹窗: 根原因定位 + 通用提示.
+                // 🔧 v4 补充: 摘前 3 帧 stack 拼到 dialog body — 用户不看 F2 也能看到源头 (与 F2 trace 同步).
+                string diagHead = "";
+                if (!string.IsNullOrEmpty(ex.StackTrace))
+                {
+                    var lines = ex.StackTrace.Split('\n');
+                    var sb = new System.Text.StringBuilder("\n\n调用栈 (前 3 帧, F2 看完整):");
+                    for (int i = 0; i < lines.Length && i < 3; i++)
+                        sb.Append('\n').Append(lines[i].TrimEnd());
+                    diagHead = sb.ToString();
+                }
                 string extraHint = DiagnoseError(ex);
                 System.Windows.Forms.MessageBox.Show(
-                    $"报价生成失败：{surfaceMessage}\n\n请检查：\n1. 模板文件是否存放在正确路径\n2. 模板文件是否正在被 Excel 打开（先关闭 Excel 再试）\n3. config.json 配置是否正确{extraHint}",
+                    $"报价生成失败：{surfaceMessage}\n\n请检查：\n1. 模板文件是否存放在正确路径\n2. 模板文件是否正在被 Excel 打开（先关闭 Excel 再试）\n3. config.json 配置是否正确{extraHint}{diagHead}",
                     "报价失败",
                     System.Windows.Forms.MessageBoxButtons.OK,
                     System.Windows.Forms.MessageBoxIcon.Error);
@@ -306,6 +387,27 @@ namespace BaoJiaCAD
             };
             var result = editor.GetFileNameForSave(prompt);
             return result.Status == PromptStatus.OK ? result.StringResult : null;
+        }
+
+        /// <summary>
+        /// 🔧 v7 per-floor template path 解析 — 按 config.TemplateSettings.Templates[tplName] 拼 tplDir/fileName 返回完整 xlsx 路径.
+        ///   与 GetTemplatePath 区别: 这里是「指定名字→路径」, 不存在 ActiveTemplate/面板 override 优先级.
+        ///   文件不存在返 null (调用方决定 fallback, 通常是 skip 该层).
+        /// </summary>
+        private string GetSpecificTemplatePath(QuoteConfig config, string tplName, Editor editor)
+        {
+            if (config == null || string.IsNullOrEmpty(tplName)) return null;
+            string dllDir = Path.GetDirectoryName(typeof(Commands).Assembly.Location);
+            var ts = config.TemplateSettings;
+            string tplDir = (ts != null && !string.IsNullOrEmpty(ts.TemplateFolderPath))
+                ? ts.TemplateFolderPath
+                : dllDir;
+            if (ts?.Templates == null) return null;
+            if (!ts.Templates.TryGetValue(tplName, out var fileName)) return null;
+            string p = Path.Combine(tplDir, fileName);
+            if (File.Exists(p)) return p;
+            editor.WriteMessage($"\n[模板] v7 per-floor {tplName} 期望文件 {fileName} 不存在 ({p})");
+            return null;
         }
 
         private string GetConfigPath()

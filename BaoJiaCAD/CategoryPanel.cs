@@ -15,9 +15,9 @@ namespace BaoJiaCAD
     /// </summary>
     public static class CategoryPanel
     {
-        /// <summary>6 大类 ——按用户口径顺序输出</summary>
+        /// <summary>🔧 v11: 8 大类 ——按用户口径顺序输出 (1客餐厅 2厨房类 3公卫[=卫生间] 4主卧 5主卫 6卧室类 + 阳台/外花园 append).</summary>
         public static readonly string[] SixCats =
-            { "客餐厅", "卫生间", "卧室", "厨房", "阳台", "外花园" };
+            { "客餐厅", "厨房", "卫生间", "主卧", "主卫", "卧室", "阳台", "外花园" };
 
         private static readonly Regex FloorPrefixRegex = new Regex(
             @"^\s*(1F|2F|3F|4F|5F|一楼|二楼|三楼|四楼|五楼|一层|二层|三层|首层)\s*",
@@ -66,7 +66,7 @@ namespace BaoJiaCAD
         {
             if (editor == null) throw new ArgumentNullException(nameof(editor));
 
-            editor.WriteMessage("\n=== 房间 6 大类归纳面板 ===");
+            editor.WriteMessage("\n=== 🔧v11 房间 8 大类归纳面板 ===");
             if (rooms == null || rooms.Count == 0)
             {
                 editor.WriteMessage("\n[无房间数据]");
@@ -212,14 +212,14 @@ namespace BaoJiaCAD
             foreach (var r in rooms)
             {
                 string cat = MapToSixCategory(r.Name, config);
-                if (cat != "卫生间" && cat != "厨房" && cat != "阳台") continue;
+                if (cat != "卫生间" && cat != "主卫" && cat != "厨房" && cat != "阳台") continue;
                 if (r.ItemFormulas == null)
                     r.ItemFormulas = new Dictionary<string, double>();
                 else
                     r.ItemFormulas.Clear();
 
                 double perim = r.Perimeter;
-                if (cat == "卫生间")
+                if (cat == "卫生间" || cat == "主卫")
                 {
                     r.ItemFormulas["地面防水处理"] = r.FloorArea;
                     r.ItemFormulas["地面防水保护层"] = r.FloorArea;

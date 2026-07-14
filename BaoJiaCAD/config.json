@@ -43,6 +43,15 @@
     },
     {
       "Keywords": [
+        "主卫",
+        "主卧内卫",
+        "主卧卫生间",
+        "主人卫生间"
+      ],
+      "RoomType": "主卫"
+    },
+    {
+      "Keywords": [
         "卫",
         "厕所",
         "洗手间"
@@ -122,7 +131,8 @@
     "RoomTypeFallbackMap": {
       "阳台": "客餐厅",
       "外花园": "客餐厅",
-      "主卧": "客餐厅"
+      "主卧": "客餐厅",
+      "主卫": "卫生间"
     },
     "FloorItemKeywords": [
       "地面保护",
@@ -450,6 +460,68 @@
           "value": "spDiamond-G",
           "match": [
             "菱贴"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        }
+      ],
+      "主卫": [
+        {
+          "label": "正铺 300-800MM (人工32)",
+          "value": "sp300-800-MBR-W",
+          "match": [
+            "正铺",
+            "300-800MM"
+          ],
+          "isDefault": true,
+          "materialPrice": 28.0,
+          "laborPrice": 32.0
+        },
+        {
+          "label": "正铺 600*1200MM (人工48)",
+          "value": "sp600-1200-MBR-W",
+          "match": [
+            "正铺",
+            "600*1200"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 48.0
+        },
+        {
+          "label": "正铺 750*1500MM (人工71)",
+          "value": "sp750-1500-MBR-W",
+          "match": [
+            "正铺",
+            "750*1500"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 71.0
+        },
+        {
+          "label": "正铺 800*1600MM (人工81)",
+          "value": "sp800-1600-MBR-W",
+          "match": [
+            "正铺",
+            "800*1600"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 81.0
+        },
+        {
+          "label": "正铺 900*1800MM (人工91)",
+          "value": "sp900-1800-MBR-W",
+          "match": [
+            "正铺",
+            "900*1800"
+          ],
+          "materialPrice": 28.0,
+          "laborPrice": 91.0
+        },
+        {
+          "label": "菱铺 300-800MM (人工48)",
+          "value": "spDiamond-MBR-W",
+          "match": [
+            "菱铺"
           ],
           "materialPrice": 28.0,
           "laborPrice": 48.0

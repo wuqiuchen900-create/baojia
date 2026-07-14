@@ -36,9 +36,17 @@ namespace BaoJiaCAD
 
         private void Debug(string msg) { Log?.Invoke(msg); }
 
-        public void Export(List<Room> rooms, string projectName, string templatePath, string outputPath, QuoteConfig config)
+        /// <param name="primaryTemplatePath">v7: 1F 模板的 xlsx 路径. 复制后作为输出 wb 的背景 (含 logo, chrome 静态块, 原型区). 单层模式 (floorTemplatePaths 空) 走原 v6 路径, 仅用此参数.</param>
+        /// <param name="primaryTemplateName">v7: 1F 模板的名字 (e.g. "dizhuan"). 用于给主模板的 prototype groups 标 SourceTemplate. 单层模式可空.</param>
+        /// <param name="floorTemplatePaths">v7: 楼层别名→xlsx 路径 映射. 空 dict / 1 项 = v6 单层行为. >1 项 = 复式多模板混合.</param>
+        public void Export(List<Room> rooms, string projectName, string primaryTemplatePath, string primaryTemplateName, Dictionary<string, string> floorTemplatePaths, string outputPath, QuoteConfig config)
         {
-            Debug($"模板路径: {templatePath}");
+            // 🔧 v7: 参数兼营. v6 调用旧 5 参数 版本时 back-compat.
+            if (floorTemplatePaths == null) floorTemplatePaths = new Dictionary<string, string>();
+            string templatePath = primaryTemplatePath;
+            bool isMultiTemplate = floorTemplatePaths.Count > 1;
+
+            Debug($"模板路径: {templatePath}" + (isMultiTemplate ? $" (v7 多模板: {floorTemplatePaths.Count} 项)" : ""));
             Debug($"输出路径: {outputPath}");
             Debug($"识别的房间数: {rooms.Count}");
 
@@ -65,10 +73,28 @@ namespace BaoJiaCAD
 
                     SetProjectName(ws, projectName);
 
-                    var templateGroups = ParseTemplate(ws, config);
-                    Debug($"模板分组数: {templateGroups.Count}");
+                    // 🔧 v7: 1F 模板的 groups 是输出 ws 的原住客 — ParseTemplate(ws) 拿到, 同时 protoStart/chromeStart 也在里面.
+                    //   复式多模板 (floorTemplatePaths.Count > 1) 时, 非主模板 (非 1F) 的 groups 拷到 scratchpad.
+                    //   复式但 实际都选同一模板 (Count==1) → 走 v6 原路径, scratchpad 不用.
+                    int scratchpadStart = -1;
+                    // 🔧 v7 regression-guard: 只在 多模板模式 (isMultiTemplate) 下 给 1F groups 标 SourceTemplate.
+                    //   v6 单模板 (isMultiTemplate=false) 时 必须 标 "" — 否则 1F groups 带 "dizhuan" 标, 但 LookupSourceTemplateForFloor
+                    //   在 SelectedFloorTemplates 空时返 "", 造成 ResolveTemplates("", ...) 找不到 group (v6 隐性 regression).
+                    //   令 tplDict 在 v6 模式下 退化为 2D (SourceTemplate 键都为 ""), 与 v6 行为一致.
+                    string mainTplName = (isMultiTemplate && !string.IsNullOrEmpty(primaryTemplateName)) ? primaryTemplateName : "";
+                    var templateGroups = ParseTemplate(ws, config, mainTplName);
+                    Debug($"模板分组数: {templateGroups.Count} (mainTplName='{mainTplName}')");
 
-                    ProcessRooms(ws, rooms, templateGroups, config);
+                    List<TemplateGroup> scratchpadGroups = null;
+                    if (isMultiTemplate)
+                    {
+                        scratchpadStart = ComputeScratchpadStart(ws, templateGroups);
+                        scratchpadGroups = BuildMultiTemplateScratchpad(ws, floorTemplatePaths, config, scratchpadStart);
+                        templateGroups.AddRange(scratchpadGroups);
+                        Debug($"v7 多模板混合: 主模板 {mainTplName} + 其它 {scratchpadGroups.Count} 组 (scratchpad start=R{scratchpadStart})");
+                    }
+
+                    ProcessRooms(ws, rooms, templateGroups, config, scratchpadStart, scratchpadGroups);
                     FixTotalFormula(ws);
 
                     Debug("数据已填入，公式自动计算");
@@ -257,6 +283,212 @@ namespace BaoJiaCAD
         }
 
         // ====================================================================
+        // 🔧 v7 多模板支持: per-floor template selection
+        //   - ParseTemplateFromPath: 纯读 (open → ParseTemplate → close) 解析外部 xlsx 拿 groups.
+        //     每个 group 带 SourceTemplate=tplName 标记.
+        //   - BuildMultiTemplateScratchpad: 把非主模板 (非 1F) 的 prototype groups
+        //     拷到输出 ws 的 scratchpad 区 (R{scratchpadStart}+) — 解决 ClosedXML
+        //     跨 workbook CopyTo 丢格式 的问题 (proto group 必须在同一 wb 才能 CopyTo
+        //     保留 formatting/row-height/formulas). 主模板 (1F) 的 groups 本来就在输出 ws,
+        //     由 ParseTemplate(ws) 拿到, 不需 scratchpad.
+        //   - scratchpadStart 由 ComputeScratchpadStart 算: chrome 最后一行的下一行 + 余量.
+        //   - 单层 / 单模板模式 (floorTemplatePaths 空 或 只有 1 项) → 跳过 scratchpad, 走原 v6 路径.
+        // ====================================================================
+
+        private int ComputeScratchpadStart(IXLWorksheet ws, List<TemplateGroup> outputGroups)
+        {
+            // 取输出 ws 的 「最后行」 — 包括 chrome + 表尾隔行. 然后 +100 余量. 99.9% 模板 < 1000 行.
+            int maxRow = 0;
+            try { maxRow = ws.LastRowUsed()?.RowNumber() ?? 0; } catch { maxRow = 0; }
+            int start = Math.Max(5000, maxRow + 100);  // 最低 5000 — 避免 0..200 撞上 chrome 区
+            return start;
+        }
+
+        private List<TemplateGroup> ParseTemplateFromPath(string xlsxPath, string tplName, QuoteConfig config)
+        {
+            var groups = new List<TemplateGroup>();
+            string raw = SafeCopyTemplateToTemp(xlsxPath);
+            string pre = PreprocessInvalidDefinedNames(raw);
+            try
+            {
+                using (var wb = new XLWorkbook(pre))
+                {
+                    var ws = wb.Worksheets.First();
+                    groups = ParseTemplate(ws, config, tplName);
+                }
+            }
+            finally
+            {
+                if (!string.Equals(pre, raw, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(pre, xlsxPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    try { File.Delete(pre); } catch { }
+                }
+                if (!string.Equals(raw, xlsxPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    try { File.Delete(raw); } catch { }
+                }
+            }
+            return groups;
+        }
+
+        // 🔧 v7 scratchpad 使用 cell-by-cell copy (而非 跨 wb Range.CopyTo):
+        //   - ClosedXML 0.97 跨 wb CopyTo 在 stylesheet/theme 同步时抛 NullReferenceException
+        //   - scratchpad 行 仅作为 后续 CloneGroupInPlace 的模板源 — 最终被删 — 不需保留原始 style.
+        //   - 单纯复制 Value + FormulaA1 已 足供 prototype 克隆源 + scratchpad 后期删除.
+        //   - 避免任何 跨 wb style sync 错误 + 无需 try-catch.
+        private List<TemplateGroup> BuildMultiTemplateScratchpad(IXLWorksheet outputWs,
+                                                                  Dictionary<string, string> floorTemplatePaths,
+                                                                  QuoteConfig config,
+                                                                  int scratchpadStart)
+        {
+            var added = new List<TemplateGroup>();
+            if (floorTemplatePaths == null || floorTemplatePaths.Count == 0) return added;
+            int cursor = scratchpadStart;
+            var processedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in floorTemplatePaths)
+            {
+                string floor = kv.Key;
+                string path = kv.Value;
+                if (string.IsNullOrEmpty(path)) continue;
+                if (processedPaths.Contains(path)) continue;
+                processedPaths.Add(path);
+
+                // 取模板名: 优先从 config.SelectedFloorTemplates 拿. 拿不到 fallback "unknown"
+                string tplName = (config?.SelectedFloorTemplates != null
+                                  && config.SelectedFloorTemplates.TryGetValue(floor ?? "", out var tn))
+                                 ? tn : "unknown";
+
+                var sourceGroups = ParseTemplateFromPath(path, tplName, config);
+                if (sourceGroups == null || sourceGroups.Count == 0) continue;
+
+                // 拷 prototype ranges 到 output ws 的 scratchpad (同 wb 内 CopyTo 保留格式)
+                string sourceRaw = SafeCopyTemplateToTemp(path);
+                string sourcePre = PreprocessInvalidDefinedNames(sourceRaw);
+                try
+                {
+                using (var srcWb = new XLWorkbook(sourcePre))
+                {
+                    // 🔧 v7 防御: 用 FirstOrDefault 避免源 xlsx 无 worksheet 时抛 InvalidOperationException (损坏/空文件)
+                    var srcWs = srcWb.Worksheets.FirstOrDefault();
+                    if (srcWs == null)
+                    {
+                        Debug($"  [v7 scratchpad] ⚠ {Path.GetFileName(path)} 无 worksheet, 跳过该模板");
+                        continue;
+                    }                    foreach (var g in sourceGroups)
+                    {
+                        int span = g.SubtotalRow - g.HeaderRow + 1;
+                        if (span < 1) continue;
+                        int srcStart = g.HeaderRow;
+                        int dstStart = cursor;
+                        int shift = dstStart - srcStart;
+                        // 🔧 v7 cell-by-cell copy (替代跨 wb Range.CopyTo):
+                        //   - ClosedXML 0.97 跨 wb CopyTo NRE (stylesheet/theme sync 深层错误)
+                        //   - scratchpad 行 仅 是 prototype 源 + 后期删 — 不需保留 原始 style
+                        //   - 复制 Value + FormulaA1 足够 — FormulaA1 setter 保留 A1 字面量 (不重锚) ✓
+                        for (int r = 0; r < span; r++)
+                        {
+                            for (int c = 1; c <= 9; c++)
+                            {
+                                var sc = srcWs.Cell(srcStart + r, c);
+                                var dc = outputWs.Cell(dstStart + r, c);
+                                if (sc.HasFormula) dc.FormulaA1 = sc.FormulaA1;
+                                else if (sc.HasRichText)
+                                {
+                                    // 🔧 v7 防御: IXLRichText 跨 wb 写引用会绑定源 wb 的 internal rich-text 表,
+                                    //   srcWb using 退出后该表失效 → wb.Save() NRE. 提取成纯 string.
+                                    dc.Value = sc.GetRichText().Text;
+                                }
+                                else dc.Value = sc.Value;   // 数字 / 日期 / 文本 / bool 都是 XLCellValue struct 值类型, 跨 wb 安全.
+                                // 🔧 v9.3: 复制关键样式 (Border + Solid Fill + Font.Bold) — 2F+ 走 secondary 模板(mudiban)
+                                //   原本 只挪 Value, CloneGroupInPlace 后丢 边框与 小计灰底. 3 项合一 try-catch:
+                                //   跨 wb Style 共享 一损 俱损 (v7 跨 wb Range.CopyTo NRE 教训), 但 合并后 调试 log 噪音 减 ⅔, 抓 1 个 NRE 看 cell 到位.
+                                if (!sc.IsEmpty())
+                                {
+                                    try
+                                    {
+                                        // 🔧 v9.3 slim: Border 由 v9.4 达截 全列 强制 default, 这里 只 掘 Fill + Font.Bold.
+                                        //   Fill: 仅 Solid 拷贝 — chrome 块 鲁铜鲁蓝 background 需 保留 (v9.4 不 覆).
+                                        if (sc.Style.Fill.PatternType == XLFillPatternValues.Solid)
+                                        {
+                                            dc.Style.Fill.PatternType = XLFillPatternValues.Solid;
+                                            dc.Style.Fill.BackgroundColor = sc.Style.Fill.BackgroundColor;
+                                        }
+                                        // Font.Bold: 只搬 Bold (其他 Font 字段 Color/Size/Family 跨 wb 风险高且 视觉冲击小)
+                                        if (sc.Style.Font.Bold) dc.Style.Font.Bold = true;
+                                    }
+                                    catch (NullReferenceException ex) { Debug($"  [v9.3 style] sc={sc.Address} → dc={dc.Address} NRE-safe skip ({ex.Message}): {ex.GetType().Name}"); }
+                                }
+                            }
+                            // 🔧 v9.5: row-level enterprise defaults — 全列 Border.Thin + 大类 (group header, r==0) 12pt bold + 小类 (item+subtotal) 11pt + 小计行 A-H 灰底
+                            //   用户明确表达 “大类 12pt bold, 小类 11pt” — 不读 src 字体 (跨 wb Font 风险高 + 源 残), 强制按行位置 enterprise 换装.
+                            //   rowOffset 用 g.SubtotalRow - g.HeaderRow 推:0=group header,中间=item,末=subtotal — 不需 c2 string 检测.
+                            int targetRow = dstStart + r;
+                            int subtotalOffset = g.SubtotalRow - g.HeaderRow;
+                            bool isGroupHeader = (r == 0);
+                            bool isSummary = (r == subtotalOffset);
+                            try
+                            {
+                                // 1) Border: 全 9 列强制 Thin — 覆盖 mudiban/dizhuan/fushi 等 源 短缺
+                                for (int c = 1; c <= 9; c++)
+                                {
+                                    var cell = outputWs.Cell(targetRow, c);
+                                    cell.Style.Border.TopBorder = XLBorderStyleValues.Thin;
+                                    cell.Style.Border.BottomBorder = XLBorderStyleValues.Thin;
+                                    cell.Style.Border.LeftBorder = XLBorderStyleValues.Thin;
+                                    cell.Style.Border.RightBorder = XLBorderStyleValues.Thin;
+                                }
+                                // 2) Font: 大类 12pt bold, 小类 (item+subtotal) 11pt normal
+                                double fontSize = isGroupHeader ? 12.0 : 11.0;
+                                for (int c = 1; c <= 9; c++)
+                                {
+                                    var cell = outputWs.Cell(targetRow, c);
+                                    cell.Style.Font.FontSize = fontSize;
+                                    if (isGroupHeader) cell.Style.Font.Bold = true;
+                                }
+                                // 3) Subtotal/total 行 col 1..9 灰底 — A->I 全列 灰 (用户明确表达, 包括 备注栏 col I)
+                                if (isSummary)
+                                {
+                                    for (int c = 1; c <= 9; c++)
+                                    {
+                                        var cell = outputWs.Cell(targetRow, c);
+                                        cell.Style.Fill.PatternType = XLFillPatternValues.Solid;
+                                        // ClosedXML 0.97: FromHtml 不可用, FromArgb 0xD9,D9,D9 = Excel 默认 LightGray
+                                        cell.Style.Fill.BackgroundColor = XLColor.FromArgb(0xD9, 0xD9, 0xD9);
+                                    }
+                                }
+                            }
+                            catch (Exception ex) { Debug($"  [v9.5 force-default] row={targetRow} NRE-safe skip ({ex.Message}): {ex.GetType().Name}"); }
+                        }
+                        g.HeaderRow += shift;
+                            g.SubtotalRow += shift;
+                            foreach (var it in g.Items) it.Row += shift;
+                            for (int i = 0; i < g.ExtraSubtotalRows.Count; i++)
+                                g.ExtraSubtotalRows[i] += shift;
+
+                            cursor += span;
+                            added.Add(g);
+                        }
+                    }
+                }
+                finally
+                {
+                    if (!string.Equals(sourcePre, sourceRaw, StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(sourcePre, path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { File.Delete(sourcePre); } catch { }
+                    }
+                    if (!string.Equals(sourceRaw, path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { File.Delete(sourceRaw); } catch { }
+                    }
+                }
+            }
+            Debug($"  [v7 scratchpad] 从 {processedPaths.Count} 个非主模板拷 {added.Count} 组到 R{scratchpadStart}..R{cursor - 1}");
+            return added;
+        }
+
+        // ====================================================================
         // 表格写入辅助 (ClosedXML API)
         // ====================================================================
 
@@ -299,7 +531,7 @@ namespace BaoJiaCAD
         // 模板解析: 把 Excel 结构 (header / items / subtotal / chrome / 合计) 抽到内存 TemplateGroup
         // ====================================================================
 
-        private List<TemplateGroup> ParseTemplate(IXLWorksheet ws, QuoteConfig config)
+        private List<TemplateGroup> ParseTemplate(IXLWorksheet ws, QuoteConfig config, string tplName = "")
         {
             var groups = new List<TemplateGroup>();
             TemplateGroup currentGroup = null;
@@ -332,6 +564,9 @@ namespace BaoJiaCAD
                         FloorLevel = ExtractFloorLevel(c2, config),
                         // chrome 段已 break — 这里所有 group 都是房间原型, ChromeOnly 恒为 false.
                         ChromeOnly = false,
+                        // 🔧 v7: 标记该组来自哪个 xlsx. ParseTemplateFromPath 调用时传入 tplName;
+                        //   v6 走原 Export 路径时 tplName="" 兼容.
+                        SourceTemplate = tplName,
                     };
                     groups.Add(currentGroup);
                     continue;
@@ -407,18 +642,28 @@ namespace BaoJiaCAD
         // ====================================================================
 
         private void ProcessRooms(IXLWorksheet ws, List<Room> rooms,
-            List<TemplateGroup> templateGroups, QuoteConfig config)
+            List<TemplateGroup> templateGroups, QuoteConfig config, int scratchpadStart = -1,
+            List<TemplateGroup> scratchpadGroups = null)
         {
             if (templateGroups.Count == 0) return;
             if (rooms == null || rooms.Count == 0) return;
 
             var prototypes = templateGroups.ToList();
-            int protoStart = prototypes.First().HeaderRow;
+            // 🔧 v7 关键修复: protoSpan 必须仅基于 1F 原型 (HeaderRow < scratchpadStart).
+            //   原逻辑 用 roomPrototypes = prototypes.ToList() 包含 scratchpad 组, 会把 protoSpan 拉到 scratchpad 后 (5000+),
+            //   Phase 5 Rows.Delete(origProtoStart, origProtoEnd) 跨 scratchpad 把整张表 + scratchpad + chrome 全部清空,
+            //   wb.Save() 内部 xml 链断裂 → NullReferenceException.
+            var roomPrototypes = scratchpadStart > 0
+                ? prototypes.Where(g => g.HeaderRow < scratchpadStart).ToList()
+                : prototypes;
+            if (roomPrototypes.Count == 0)
+            {
+                Debug("  ⚠ [ProcessRooms] 没 1F 原型, 早退");
+                return;
+            }
+            int protoStart = roomPrototypes.First().HeaderRow;
 
-            // Chrome 段已不在 groups — 不再维护 chromeGroups 变量
-            var roomPrototypes = prototypes.ToList();
-
-            // protoSpan 只覆盖 room prototypes (chrome 由 Delete 顶上来, 不需要它的长度)
+            // protoSpan 只覆盖 1F 原型 (chrome 由 Delete 顶上来, 不需它的长度)
             int roomBlockEnd = protoStart;
             int validSubtotalCount = 0;
             foreach (var g in roomPrototypes)
@@ -452,10 +697,14 @@ namespace BaoJiaCAD
                 return;
             }
 
-            // 楼层×类型 模板查找字典 (仅 room prototypes)
-            var tplDict = roomPrototypes
+            // 楼层×类型 模板查找字典 (含 1F 原型 + scratchpad 组)
+            // 🔧 v7: 三维 key (SourceTemplate, FloorLevel, RoomType) — 复式多模板时 不同层可同 roomType 但
+            //   走不同 xlsx 模板 (e.g. 1F|客 走 dizhuan, 2F|客 走 mudiban). tplDict 严格分流.
+            //   v6 单层 / 单模板 时 所有 group 都有 SourceTemplate="" 或 同名 → 退化为二维 (隐式兼容).
+            //   选 prototypes (包括 scratchpad), 跨模板 lookup 才会命中 scratchpad 组.
+            var tplDict = prototypes
                 .Where(g => g.SubtotalRow > g.HeaderRow)
-                .GroupBy(g => (g.FloorLevel, g.RoomType))
+                .GroupBy(g => (g.SourceTemplate ?? "", g.FloorLevel, g.RoomType))
                 .ToDictionary(g => g.Key, g => g.ToList());
 
             string NormFloor(string f) => string.IsNullOrWhiteSpace(f) ? "未指定" : f;
@@ -481,7 +730,9 @@ namespace BaoJiaCAD
                         .ToList();
                     foreach (var room in catRooms)
                     {
-                        var tplList = ResolveTemplates(room.FloorLevel, room.RoomType, tplDict, roomPrototypes, config);
+                        // 🔧 v7: 根据该层的面板选择 决定 sourceTpl — 复式多模板关键路径.
+                        string sourceTpl = LookupSourceTemplateForFloor(room.FloorLevel, config);
+                        var tplList = ResolveTemplates(sourceTpl, room.FloorLevel, room.RoomType, tplDict, roomPrototypes, config);
                         if (tplList != null && tplList.Count > 0)
                         {
                             int span = tplList[0].SubtotalRow - tplList[0].HeaderRow + 1;
@@ -493,7 +744,7 @@ namespace BaoJiaCAD
                         }
                         else
                         {
-                            Debug($"  类型 [{room.RoomType}] 楼层 [{room.FloorLevel}]: 模板中无匹配分组，跳过房间 [{room.Name}]");
+                            Debug($"  类型 [{room.RoomType}] 楼层 [{room.FloorLevel}] (源模板={sourceTpl}): 模板中无匹配分组，跳过房间 [{room.Name}]");
                         }
                     }
                 }
@@ -518,8 +769,10 @@ namespace BaoJiaCAD
             Debug($"  已插入 {totalRequiredRows} 空白行 at R{protoStart} (ClosedXML 保留 drawings)");
 
             // 阶段 3: 更新所有 templateGroup 的 row 偏移 (InsertRowsAbove 把旧内容整体下移)
+            //   🔧 v7 修复: 选 prototypes 不是 roomPrototypes — scratchpad 组 也会被插入行 下推 totalRequiredRows,
+            //   不更新他们的 refs 会 让他们 refs 错位 后续 CloneGroupInPlace 找不到源。
             int shift = totalRequiredRows;
-            foreach (var g in roomPrototypes)
+            foreach (var g in prototypes)
             {
                 g.HeaderRow += shift;
                 g.SubtotalRow += shift;
@@ -559,7 +812,9 @@ namespace BaoJiaCAD
                         .ToList();
                     foreach (var room in catRooms)
                     {
-                        var tplList = ResolveTemplates(room.FloorLevel, room.RoomType, tplDict, roomPrototypes, config);
+                        // 🔧 v7: per-floor template 分流 — 1F 走 dizhuan groups (输出 ws 内), 2F 走 mudiban groups (scratchpad 内).
+                        string sourceTpl = LookupSourceTemplateForFloor(room.FloorLevel, config);
+                        var tplList = ResolveTemplates(sourceTpl, room.FloorLevel, room.RoomType, tplDict, roomPrototypes, config);
                         if (tplList == null || tplList.Count == 0) continue;
 
                         var sourceGroup = tplList[0];
@@ -588,6 +843,23 @@ namespace BaoJiaCAD
             ws.Rows(origProtoStartAfterInsert, origProtoEndAfterInsert).Delete();
             Debug($"  原型区 R{origProtoStartAfterInsert}..R{origProtoEndAfterInsert} ({protoSpan} 行) 已 Delete — chrome 静态块自动顶到 R{protoStart + totalRequiredRows}");
 
+            // 🔧 v7 阶段 5.5: scratchpad group refs 需同步下推 protoSpan 行 (因 Phase 5 Delete 把这些行上推了).
+            //   scratchpad 行在 ws 中实际位置: scratchpadStart + totalRequiredRows (Phase 3 InsertRowsAbove 同步下推) - protoSpan (Phase 5 Delete 同步上推).
+            //   scratchpadGroups 字段是 Phase 3 后值 (未含 Phase 5 shift). 这里补 -protoSpan 让它跟上 ws 实际位置.
+            if (scratchpadGroups != null && scratchpadGroups.Count > 0)
+            {
+                foreach (var sg in scratchpadGroups)
+                {
+                    sg.HeaderRow -= protoSpan;
+                    sg.SubtotalRow -= protoSpan;
+                    foreach (var it in sg.Items) it.Row -= protoSpan;
+                    if (sg.ExtraSubtotalRows != null)
+                        for (int i = 0; i < sg.ExtraSubtotalRows.Count; i++)
+                            sg.ExtraSubtotalRows[i] -= protoSpan;
+                }
+                Debug($"  v7 scratchpad refs -protoSpan (Phase 5 Delete shift) 同步完成 ({scratchpadGroups.Count} 组)");
+            }
+
             // 阶段 6+7 已删除:
             //   - FixChromeFormulas 不再调用 — chrome 区视为单一静态块, 模板自带的子段公式不动
             //   - chrome "其它"段 col3/5/6/7/8 Clear 不再调用 — 模板里这些列本就是空(预留用户填)
@@ -595,13 +867,50 @@ namespace BaoJiaCAD
             templateGroups.Clear();
             templateGroups.AddRange(generatedGroups);
 
-            // 阶段 8: 重设 PrintArea
+            // 🔧 v10: Phase 8 (PrintArea) 后置 到 Phase 9 (scrap cleanup) 之后 — 旧顺序 LastRowUsed() 含 scratchpad (R5000+) → PrintArea 包含 R1:R5000+ 空白 → 用户 每次 要 手点取消 打印区
+            //   顺序 修正 后, Phase 9 先 删 scratchpad 行, Phase 8 再 跑 LastRowUsed() = 真实内容末行 (= chrome末行 与 房末写 取 max), print 区域 与 报告 内容 一致.
+            //   该代码块 本轮 删除, 见 下方 在 Phase 9 后 重新插入
+            // 🔧 v7 阶段 9: 清理 scratchpad — 复式多模板时 R{scratchpadStart}+ 有拷进来的外部模板原型区,
+            //   现在全部房间已 clone 完, 这些暂存区可删 (避免用户滚到下面看到他们).  计算需删的区段:
+            //   scratchpadStart 已被 InsertRowsAbove 上推 +totalRequiredRows → 仍远在原型区下方, Delete 不影响 chrome.
+            // 🔧 v7 阶段 9: 清理 scratchpad — 复式多模板时 R{scratchpadStart}+ 有拷进来的外部模板原型区,
+            //   现在全部房间已 clone 完, 这些暂存区可删 (避免用户滚到下面看到他们).
+            //   scratchpad 在 ws 中实际位置: scratchpadStart + totalRequiredRows - protoSpan
+            //     (Phase 3 InsertRowsAbove 下推 +totalRequiredRows, Phase 5 Delete 上推 protoSpan).
+            //   scratchpadGroups 字段已在 Phase 5.5 同步 (减过 protoSpan). 直接读即可.
+            if (scratchpadGroups != null && scratchpadGroups.Count > 0 && scratchpadStart > 0)
+            {
+                int padStart = scratchpadStart + totalRequiredRows - protoSpan;
+                int padEnd = padStart;
+                foreach (var g in scratchpadGroups)
+                {
+                    if (g.SubtotalRow > padEnd) padEnd = g.SubtotalRow;
+                }
+                if (padEnd >= padStart)
+                {
+                    try
+                    {
+                        ws.Rows(padStart, padEnd).Delete();
+                        Debug($"  v7 scratchpad R{padStart}..R{padEnd} 已 Delete (清理 {padEnd - padStart + 1} 行)");
+                    }
+                    catch (Exception spEx)
+                    {
+                        Debug($"  v7 scratchpad Delete 失败 (非致命): {spEx.Message}");
+                    }
+                }
+            }
+
+            // 🔧 v10: Phase 8 (PrintArea) 后置 — 在 Phase 9 scratchpad cleanup 后 跑, LastRowUsed() = 真内容末行 (不含 R5000+ scratchpad).
+            //   产品 老路径 Phase 8 在 Phase 9 前 → LastRowUsed 看到 scratchpad 内容 → PrintArea = A1:I{5200+} → Excel 打印时 多 50+ 页空白.
+            //   实现 是 “默认 安全” + “保守” 双面: writeCursor-1 (本地 tracker) 与 LastRowUsed() (post-cleanup ws 真实) 取 max — 防 chrome 多行 vs content 多行 两个一边偏低.
             try
             {
-                int newMaxRow = ws.LastRowUsed()?.RowNumber() ?? writeCursor - 1;
+                int contentMax = Math.Max(writeCursor - 1, 0);
+                int newMaxRow = ws.LastRowUsed()?.RowNumber() ?? contentMax;
+                if (newMaxRow < contentMax) newMaxRow = contentMax;
                 ws.PageSetup.PrintAreas.Clear();
                 ws.PageSetup.PrintAreas.Add($"A1:I{newMaxRow}");
-                Debug($"  PrintArea 已重设为 A1:I{newMaxRow}");
+                Debug($"  PrintArea 已重设为 A1:I{newMaxRow} (v10 后置: Phase 9 scratchpad 已清, LastRowUsed() = 真末行)");
             }
             catch (Exception paEx)
             {
@@ -689,53 +998,91 @@ namespace BaoJiaCAD
         // ====================================================================
 
         private List<TemplateGroup> ResolveTemplates(
-            string cadFloor, string cadType,
-            Dictionary<(string Floor, string Type), List<TemplateGroup>> tplGroups,
+            string sourceTpl, string cadFloor, string cadType,
+            Dictionary<(string Tpl, string Floor, string Type), List<TemplateGroup>> tplGroups,
             List<TemplateGroup> allGroups, QuoteConfig config)
         {
+            // 🔧 v7: 三维 key (Tpl, Floor, Type) 严格分流 — 不同模板不混。优先级:
+            //   1. (sourceTpl, cadFloor, cadType)           — 严格命中
+            //   2. (sourceTpl, "", cadType)                 — 源模板内 通用 (不需层前缀)
+            //   3. (sourceTpl, cadFloor, fallbackType)      — 源模板 + 房间类型回退 (eg 阳台→客餐厅)
+            //   4. (sourceTpl, "", fallbackType)           — 源模板 + 通用回退
+            //   5. ("", cadFloor, cadType)                  — v6 兑底: 不分模板 按 (floor, type) 查
+            //   6. ("", "", cadType)                        — v6 兑底: 完全通用
+            //   7. allGroups 中 SourceTemplate==sourceTpl + RoomType==cadType 的 fallback (兑底)
+            string st = sourceTpl ?? "";
+
+            // 1.
             if (!string.IsNullOrEmpty(cadFloor)
-                && tplGroups.TryGetValue((cadFloor, cadType), out var exact) && exact.Count > 0)
+                && tplGroups.TryGetValue((st, cadFloor, cadType), out var exact) && exact.Count > 0)
                 return exact;
-            if (!string.IsNullOrEmpty(cadFloor)
-                && tplGroups.TryGetValue(("", cadType), out var flat) && flat.Count > 0)
+            // 2.
+            if (tplGroups.TryGetValue((st, "", cadType), out var flat) && flat.Count > 0)
             {
-                Debug($"  CAD楼层 [{cadFloor}] 回退到通用模板: {cadType}");
+                Debug($"  源模板 [{st}] 楼层 [{cadFloor}] 命中通用模板: {cadType}");
                 return flat;
             }
+
             var fbMap = config?.TemplateSettings?.RoomTypeFallbackMap;
             string fallbackType = null;
-            if (fbMap != null && fbMap.TryGetValue(cadType, out var fb))
+            // 🔧 v7 防御: cadType 为 null/空时 Dictionary.TryGetValue 抛 ArgumentNullException (会被 catch 接 化成 自定义错误对话,
+            //   但原 v6 这里没有 guard — JSON deserializer 可能 进 null fbMap value 进 dict).
+            if (fbMap != null && !string.IsNullOrEmpty(cadType) && fbMap.TryGetValue(cadType, out var fb))
                 fallbackType = fb;
             if (fallbackType == null && (cadType == "阳台" || cadType == "外花园"))
                 fallbackType = "客餐厅";
             if (fallbackType != null)
             {
+                // 3.
                 if (!string.IsNullOrEmpty(cadFloor)
-                    && tplGroups.TryGetValue((cadFloor, fallbackType), out var fbExact) && fbExact.Count > 0)
+                    && tplGroups.TryGetValue((st, cadFloor, fallbackType), out var fbExact) && fbExact.Count > 0)
                 {
-                    Debug($"  房间类型 [{cadType}] 回退到 [{fallbackType}] 模板组");
+                    Debug($"  源模板 [{st}] 房间类型 [{cadType}] 回退到 [{fallbackType}] 模板组");
                     return fbExact;
                 }
-                if (!string.IsNullOrEmpty(cadFloor)
-                    && tplGroups.TryGetValue(("", fallbackType), out var fbFlat) && fbFlat.Count > 0)
+                // 4.
+                if (tplGroups.TryGetValue((st, "", fallbackType), out var fbFlat) && fbFlat.Count > 0)
                 {
-                    Debug($"  房间类型 [{cadType}] 回退到 [{fallbackType}] 通用模板");
+                    Debug($"  源模板 [{st}] 房间类型 [{cadType}] 回退到 [{fallbackType}] 通用模板");
                     return fbFlat;
                 }
             }
+
+            // 5. v6 兑底: 不带 SourceTemplate
+            if (!string.IsNullOrEmpty(cadFloor)
+                && tplGroups.TryGetValue(("", cadFloor, cadType), out var v6Exact) && v6Exact.Count > 0)
+                return v6Exact;
+            // 6.
+            if (tplGroups.TryGetValue(("", "", cadType), out var v6Flat) && v6Flat.Count > 0)
+            {
+                Debug($"  v6 兑底: 源模板 [{st}] 无 {cadType} 模板, 走 v6 通用 (key=[\"\",\"\",\"{cadType}\"])");
+                return v6Flat;
+            }
+
+            // 7. allGroups 兑底 (源模板 + 楼层 不命中, 源模板 + 类型 不命中 → 从 allGroups 扫同源模板 + 同类型的任何楼层)
+            var sameTplSameType = allGroups
+                .Where(g => (g.SourceTemplate ?? "") == st && g.RoomType == cadType && g.SubtotalRow > g.HeaderRow)
+                .ToList();
+            if (sameTplSameType.Count > 0)
+            {
+                Debug($"  源模板 [{st}] 类型 [{cadType}] 兑底: 走同模板同类型的任何楼层");
+                return sameTplSameType;
+            }
+
+            // 8. 最后兑底: 忽略 SourceTemplate 随便拿一个同 cadType 的 group (仅 CAD 无楼层 时)
             if (string.IsNullOrEmpty(cadFloor))
             {
-                if (tplGroups.TryGetValue(("", cadType), out var flatNoCad) && flatNoCad.Count > 0)
-                {
-                    Debug($"  CAD无楼层，回退到通用模板 (key=\"\"): {cadType}");
-                    return flatNoCad;
-                }
+                var flatNoCad = allGroups
+                    .Where(g => g.RoomType == cadType && g.SubtotalRow > g.HeaderRow && string.IsNullOrEmpty(g.FloorLevel))
+                    .ToList();
+                if (flatNoCad.Count > 0) return flatNoCad;
+
                 var oneF = allGroups
                     .Where(g => g.RoomType == cadType && g.SubtotalRow > g.HeaderRow && g.FloorLevel == "一楼")
                     .ToList();
                 if (oneF.Count > 0)
                 {
-                    Debug($"  CAD无楼层，回退到模板一楼: {cadType}");
+                    Debug($"  CAD无楼层, 回退到模板一楼: {cadType}");
                     return oneF;
                 }
                 var first = allGroups
@@ -744,11 +1091,21 @@ namespace BaoJiaCAD
                     .ToList();
                 if (first.Count > 0)
                 {
-                    Debug($"  CAD无楼层，回退到模板首个楼层 [{first[0].FloorLevel}]: {cadType}");
+                    Debug($"  CAD无楼层, 回退到模板首个楼层 [{first[0].FloorLevel}]: {cadType}");
                     return first;
                 }
             }
             return null;
+        }
+
+        /// <summary>🔧 v7 根据房间的楼层查该层面板选的模板. 单层模式 (SelectedFloorTemplates 空) 返回 "" 走 v6 路径.</summary>
+        private string LookupSourceTemplateForFloor(string floorLevel, QuoteConfig config)
+        {
+            if (config?.SelectedFloorTemplates == null) return "";
+            if (string.IsNullOrEmpty(floorLevel)) return "";
+            if (config.SelectedFloorTemplates.TryGetValue(floorLevel, out var t) && !string.IsNullOrEmpty(t))
+                return t;
+            return "";
         }
 
         // ====================================================================
@@ -851,11 +1208,27 @@ namespace BaoJiaCAD
             //   行却 被算成 多规格 的事故
             int floorItemCount = group.Items.Count(i =>
                 IsFloorItem(i.Name, config) && IdentifyTileSpecMatch(i.Name, config, room.RoomType) != null);
+            // 🔧 v6 多楼层选择: 3-key 回退 — k1 主路径(per-floor), k2 全局兑底, k3 老单楼层面板.
+            //   "<NONE>" marker → selectedSpecCached=null (mudiban 风格跳过 PHASE A).
             string selectedSpecCached = null;
-            if (config?.SelectedTileSpecs != null
-                && config.SelectedTileSpecs.TryGetValue(room.RoomType ?? "", out var selSpecCachedVal)
-                && !string.IsNullOrEmpty(selSpecCachedVal))
-                selectedSpecCached = selSpecCachedVal;
+            if (config?.SelectedTileSpecs != null)
+            {
+                string floorKey = (room.FloorLevel ?? "").Trim();
+                string roomKey = (room.RoomType ?? "").Trim();
+                string k1 = floorKey + "|" + roomKey;
+                string k2 = "|" + roomKey;
+                string k3 = roomKey;
+                string resolved = null;
+                if (config.SelectedTileSpecs.TryGetValue(k1, out var v1) && !string.IsNullOrEmpty(v1))
+                    resolved = v1;
+                else if (config.SelectedTileSpecs.TryGetValue(k2, out var v2) && !string.IsNullOrEmpty(v2))
+                    resolved = v2;
+                else if (config.SelectedTileSpecs.TryGetValue(k3, out var v3) && !string.IsNullOrEmpty(v3))
+                    resolved = v3;
+                // 🔧 "<NONE>" → selectedSpecCached=null (mudiban 风格 — 泥板/木地板本奇价格不动).
+                if (resolved != null && resolved != "<NONE>")
+                    selectedSpecCached = resolved;
+            }
             foreach (var item in group.Items)
             {
                 // 🔧 PHASE A: 单规格模板 price override (C5/C7 + C9 备注 marker)
@@ -1146,6 +1519,9 @@ namespace BaoJiaCAD
         public List<int> ExtraSubtotalRows { get; set; } = new List<int>();
         public bool ChromeOnly { get; set; } = false;
         public List<TemplateItem> Items { get; set; } = new List<TemplateItem>();
+        /// <summary>🔧 v7 per-floor template: 来自哪个 xlsx (e.g. "dizhuan", "mudiban"). "" = v6 默认/未指定.
+        ///   用于 tplDict 三维 key (SourceTemplate, FloorLevel, RoomType) + ResolveTemplates 优先级查找.</summary>
+        public string SourceTemplate { get; set; } = "";
     }
 
     internal class TemplateItem
