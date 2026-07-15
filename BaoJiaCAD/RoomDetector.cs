@@ -97,6 +97,15 @@ namespace BaoJiaCAD
                         continue;
                     }
 
+                    // 🔧 v17.4: 窗 户 标 签 (CH / ZH / DH / SH) 不 是 房 间 名, 静 默 跳 过
+                    //   复 用 WindowAreaDetector.WindowLabelRegex (internal, 同 assembly 可访)
+                    //   既 不 加 SkippedTexts 也 不 加 Warnings, 防 「识别遗漏 · 最终汇总」 每 次
+                    //   把 「DH:740」「SH:400」 这类 窗户 axis-label 刷 屏
+                    if (WindowAreaDetector.WindowLabelRegex.IsMatch(text))
+                    {
+                        continue;
+                    }
+
                     string roomType = MatchRoomType(text);
                     if (string.IsNullOrEmpty(roomType))
                     {

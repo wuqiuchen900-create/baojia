@@ -210,6 +210,24 @@ namespace BaoJiaCAD
             @"\d+(?:[-*]\d+)?\s*MM[\)\uff09\s]*",
             RegexOptions.Compiled);
 
+        // 🔧 v17.2: 3 个墙面项目 关键字 (C3 = WallArea − Room.WindowArea)。Item.Name 包含 任一 返 true。
+        //   - 「墙顶面基层加固」 → 已 是 QuoteItem (CalcRule CeilingAndWall)
+        //   - 「墙面基层处理（鸟巢腻子）」 → QuoteItem 名 含 「墙面基层处理」 子串 即 命中
+        //   - 「芬琳芬华五合一内墙乳胶漆」 → QuoteConfig 中 现在 加 独立 QuoteItem (设为 CeilingAndWall)
+        private static readonly string[] WindowDeductWallItemKeywords = new[]
+        {
+            "墙顶面基层加固", "墙面基层处理", "芬琳芬华五合一内墙乳胶漆",
+        };
+
+        // 🔧 v17.2: item.Name 是否 命中 “需 扣减 窗户面积”关键字 集合。
+        public static bool IsWindowDeductWallItem(string itemName)
+        {
+            if (string.IsNullOrEmpty(itemName)) return false;
+            foreach (var kw in WindowDeductWallItemKeywords)
+                if (itemName.Contains(kw)) return true;
+            return false;
+        }
+
         // 🔧 v15 扩展 v14 trigger: 除 客餐厅 外, 阳台 / 外花园 也 同 走 special layout.
         //   理由: config.RoomTypeFallbackMap 已 让 阳台 / 外花园 fallback → 客餐厅 group (mudiban 模板中) —
         //     helper 内容 (rename 实木石砖线 → 地面找平 + 地面保护=0 + 墙面行 wallArea 与 RoomType 无关) 通用适用.
@@ -1249,8 +1267,11 @@ namespace BaoJiaCAD
             {
                 if (handledRows.Contains(item)) continue;
                 if (IsWallItem(item.Name, config))
-                {
-                    ws.Cell(item.Row, 3).Value = Math.Round(room.WallArea, 1, MidpointRounding.AwayFromZero);
+                {                                // 🔧 v17.2: 命中 3 个墙面 项目 时 C3 = WallArea − WindowArea (锁 0免 负)
+                                double wallQty = IsWindowDeductWallItem(item.Name)
+                                    ? Math.Max(0.0, room.WallArea - room.WindowArea)
+                                    : room.WallArea;
+                                ws.Cell(item.Row, 3).Value = Math.Round(wallQty, 1, MidpointRounding.AwayFromZero);
                     filled++;
                     Debug($"    [v14 mudiban 客None] 墙行{item.Row} [{item.Name}] C3={room.WallArea:F2}");
                 }
@@ -1516,8 +1537,11 @@ namespace BaoJiaCAD
                     Debug($"    填地面 行{item.Row}: [{item.Name}] 数量={room.FloorArea:F2}");
                 }
                 else if (IsWallItem(item.Name, config))
-                {
-                    ws.Cell(item.Row, 3).Value = Math.Round(room.WallArea, 1, MidpointRounding.AwayFromZero);
+                {                                // 🔧 v17.2: 命中 3 个墙面 项目 时 C3 = WallArea − WindowArea (锁 0免 负)
+                                double wallQty = IsWindowDeductWallItem(item.Name)
+                                    ? Math.Max(0.0, room.WallArea - room.WindowArea)
+                                    : room.WallArea;
+                                ws.Cell(item.Row, 3).Value = Math.Round(wallQty, 1, MidpointRounding.AwayFromZero);
                     filled++;
                     Debug($"    填墙面 行{item.Row}: [{item.Name}] 数量={room.WallArea:F2}");
                 }

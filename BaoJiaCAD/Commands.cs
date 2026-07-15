@@ -226,6 +226,10 @@ namespace BaoJiaCAD
                 //   在 ExcelExporter 导出前调, 这样 Excel 填充时 IsCurtainBoxItem 路径读到 CurtainBoxLength 已 > 0.
                 WindowBoxDetector.DetectCurtainBoxLengths(allRooms, editor, config, msg => editor.WriteMessage($"\n{msg}"));
 
+                // 🔧 v17.2: 窗户面积检测 — 独立 出 WindowAreaDetector。与 CurtainBox 互不调 用, 扫同一 Source (窗户 图层 OR 251 颜色)
+                //   但 后续 房间 归属 / 标签 拾取 完全 并行 类。结果存 Room.WindowArea (㎡)。FillRoomData 下 游 3 个墙项 扣减 需 读 此 值。
+                WindowAreaDetector.DetectWindowAreas(allRooms, editor, config, msg => editor.WriteMessage($"\n{msg}"));
+
                 // 🔧 v16.1 fix (round-3 reviewer Q2): 同步刷 room.Items + 清理 in-memory Polyline 克隆 都 移到 exporter 之前.
                 //   (reviewer #4 nice-to-have: 该 段 在 finally 更稳 — 但 C# 要求 catch 必须在 finally 前, 加 江西 not 不 优美.
                 //    本轮 取此 实现 — 提前到 exporter 前, Export 抛 catch 仍 跑 catch 报告, leak 不 发生.)

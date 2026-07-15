@@ -142,6 +142,18 @@ namespace BaoJiaCAD
                         CalcRule = "CeilingAndWall",
                         Description = "鸟巢水性嵌缝石膏补顶缝、瑞安健康找平腻子底层、瑞安健康腻子面层、白布、砂纸、牛皮纸、人工及机具费。"
                     },
+                    // 🔧 v17.2: 芬琳芬华五合一内墙乳胶漆 — 之前只在 WallItemKeywords 列表中 (isWallItem true), 未 作为 独立 QuoteItem.
+                    //   现 加上, CalcRule=CeilingAndWall, ExcelExporter.IsWindowDeductWallItem 才能 进行 窗 面积 扣减 (C3 = WallArea − WindowArea).
+                    //   价格 默认 28 / 18 (与 dizhuan 主墙顶面 不 一致; 应 user 后续 config 调整).
+                    new QuoteItemConfig
+                    {
+                        Name = "芬琳芬华五合一内墙乳胶漆",
+                        Unit = "m²",
+                        MaterialPrice = 28.0,
+                        LaborPrice = 18.0,
+                        CalcRule = "CeilingAndWall",
+                        Description = "墙面乳胶漆 涂刷 含 底漆 面漆 (价位 调 MaterialPrice/LaborPrice 后续 补)."
+                    },
                     // 🔧 v16: 窗帘盒 (curtain box). 数量 = room.CurtainBoxLength (米, 由 WindowBoxDetector 自动检测填充).
                     //   模板需建一行名含「窗帘盒」的子项. ExcelExporter.FillRoomData 走 IsCurtainBoxItem 独立路径.
                     new QuoteItemConfig

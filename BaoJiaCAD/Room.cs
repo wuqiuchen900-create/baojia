@@ -51,6 +51,12 @@ namespace BaoJiaCAD
         /// <summary>🔧 v16: 窗帘盒总长 (米) — 该房间所有「覆盖窗户的墙段」长度之和.
         ///   默认 0.0; WindowBoxDetector.DetectCurtainBoxLengths 后 填入. 浮空窗户不计入.</summary>
         public double CurtainBoxLength { get; set; } = 0.0;
+
+        /// <summary>🔧 v17.2: 房间窗户总面积 (㎡). 该房间所有「窗户图层/251 颜色单线」 × 「高」/2 累加.
+        ///   默认 0.0; WindowAreaDetector.DetectWindowAreas 后 填入.
+        ///   墙面三项 扣减 入口 (墙顶面基层加固 / 墙面基层处理 《鸟巢腻子》 / 芬琳亣华五合一内墙乳胶漆) C3 = WallArea = Round(WallArea - WindowArea, 1, AwayFromZero).
+        ///   不影响 room.WallArea Getter 本身, FillRoomData 在 写 表面 临时 计算 扣后 值.</summary>
+        public double WindowArea { get; set; } = 0.0;
     }
 
     /// <summary>
