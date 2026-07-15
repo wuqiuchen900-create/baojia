@@ -1138,7 +1138,7 @@ namespace BaoJiaCAD
         private int ApplyLivingRoomNoneMudiban(IXLWorksheet ws, TemplateGroup group, Room room, QuoteConfig config)
         {
             int filled = 0;
-            double floorArea = Math.Round(room.FloorArea, 2, MidpointRounding.AwayFromZero);
+            double floorArea = Math.Round(room.FloorArea, 1, MidpointRounding.AwayFromZero);
 
             // 🔧 v14 fix(reviewer 1): C9 marker 用 PHASE A 同模式 — 保留 原 备注 + 仅 strip 旧 v14 marker 再 加 新.
             Action<int, string> writeMarker = (row, marker) =>
@@ -1250,7 +1250,7 @@ namespace BaoJiaCAD
                 if (handledRows.Contains(item)) continue;
                 if (IsWallItem(item.Name, config))
                 {
-                    ws.Cell(item.Row, 3).Value = Math.Round(room.WallArea, 2, MidpointRounding.AwayFromZero);
+                    ws.Cell(item.Row, 3).Value = Math.Round(room.WallArea, 1, MidpointRounding.AwayFromZero);
                     filled++;
                     Debug($"    [v14 mudiban 客None] 墙行{item.Row} [{item.Name}] C3={room.WallArea:F2}");
                 }
@@ -1460,7 +1460,7 @@ namespace BaoJiaCAD
                     if (key != null)
                     {
                         double qty = room.OutdoorGardenFormulas[key];
-                        ws.Cell(item.Row, 3).Value = Math.Round(qty, 2, MidpointRounding.AwayFromZero);
+                        ws.Cell(item.Row, 3).Value = Math.Round(qty, 1, MidpointRounding.AwayFromZero);
                         filled++;
                         outdoorHit++;
                         Debug($"    [外花园公式] 行{item.Row} [{item.Name}]: 数量={qty:F2} (key={key})");
@@ -1473,7 +1473,7 @@ namespace BaoJiaCAD
                     if (key2 != null)
                     {
                         double qty2 = room.ItemFormulas[key2];
-                        ws.Cell(item.Row, 3).Value = Math.Round(qty2, 2, MidpointRounding.AwayFromZero);
+                        ws.Cell(item.Row, 3).Value = Math.Round(qty2, 1, MidpointRounding.AwayFromZero);
                         filled++;
                         indoorHit++;
                         Debug($"    [室内公式] 行{item.Row} [{item.Name}]: 数量={qty2:F2} (key={key2})");
@@ -1496,7 +1496,7 @@ namespace BaoJiaCAD
                         // C5/C7/C9 已在 PHASE A 处理 (顶位跑保证不被 ItemFormulas 短路).
                         // 这里只为 C3 填 FloorArea. 若 ItemFormulas 已填 (Phase C 先 续)
                         // 也不会被 覆盖,因为 Phase C 是在该块之前跑且全程已 Phase A 生效.
-                        ws.Cell(item.Row, 3).Value = Math.Round(room.FloorArea, 2, MidpointRounding.AwayFromZero);
+                        ws.Cell(item.Row, 3).Value = Math.Round(room.FloorArea, 1, MidpointRounding.AwayFromZero);
                         filled++;
                         Debug($"    [填地面 单规格] 行{item.Row}: [{item.Name}] 数量={room.FloorArea:F2} (规格={selectedSpecCached ?? "<未选>"})");
                         continue;
@@ -1511,19 +1511,19 @@ namespace BaoJiaCAD
                         continue;
                     }
 
-                    ws.Cell(item.Row, 3).Value = Math.Round(room.FloorArea, 2, MidpointRounding.AwayFromZero);
+                    ws.Cell(item.Row, 3).Value = Math.Round(room.FloorArea, 1, MidpointRounding.AwayFromZero);
                     filled++;
                     Debug($"    填地面 行{item.Row}: [{item.Name}] 数量={room.FloorArea:F2}");
                 }
                 else if (IsWallItem(item.Name, config))
                 {
-                    ws.Cell(item.Row, 3).Value = Math.Round(room.WallArea, 2, MidpointRounding.AwayFromZero);
+                    ws.Cell(item.Row, 3).Value = Math.Round(room.WallArea, 1, MidpointRounding.AwayFromZero);
                     filled++;
                     Debug($"    填墙面 行{item.Row}: [{item.Name}] 数量={room.WallArea:F2}");
                 }
                 else if (IsCurtainBoxItem(item.Name))
                 {
-                    var qty = Math.Round(room.CurtainBoxLength, 2, MidpointRounding.AwayFromZero);
+                    var qty = Math.Round(room.CurtainBoxLength, 1, MidpointRounding.AwayFromZero);
                     ws.Cell(item.Row, 3).Value = qty;
                     filled++;
                     if (qty > 0)
