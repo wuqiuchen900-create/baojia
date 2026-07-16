@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using Newtonsoft.Json;
 
 namespace BaoJiaCAD
 {
@@ -34,6 +35,11 @@ namespace BaoJiaCAD
         //   防御默认 = 760 — 万一 BuildTileSpecSection 提前 return (空 TileSpecOptions) 字段 为 0 防 Math.Max 跌破 原 layout
         private int _initialFormHeight = 760;
         private Button _btnCancel;
+        // 🔧 v22: 「恢复默认」按钮 — 删除 user-overrides.json + 重置 内存 state 到 config.json 默认值。
+        private Button _btnReset;
+        // 🔧 v22: 记住 上次 ctor 传入 的 config/dwgName — ResetToDefaults 需要 重 填 默认值 时 用。
+        private readonly QuoteConfig _config;
+        private readonly string _dwgName;
 
         // 🔧 瓷砖规格动态下拉: 仅当 config.TemplateSettings.TileSpecOptions[roomType].Count ≥ 2 才生成.
         private readonly Dictionary<string, ComboBox> _tileSpecCombos = new Dictionary<string, ComboBox>();
@@ -48,8 +54,14 @@ namespace BaoJiaCAD
         // 🔧 v7 每层 模板下拉 (key=楼层别名, value=ComboBox)
         private readonly Dictionary<string, ComboBox> _multiFloorTemplateCombos
             = new Dictionary<string, ComboBox>();
+        // 🔧 v19: 每层 墙高 (mm) NumericUpDown — 复式不同层层高时, 用户最后一列手填; 默认取面板全局 _numWallHeight.
+        private readonly Dictionary<string, NumericUpDown> _multiFloorWallHeightCombos
+            = new Dictionary<string, NumericUpDown>();
+        // 🔧 v19.1 fix: 跨 RebuildMultiFloorGrid (复式 off→on / _numFloorCount 变) 保留 用户手填值 — 避免 toggle on/off 跟 调层数 后 丢输。
+        private readonly Dictionary<string, double> _lastPerFloorHeights = new Dictionary<string, double>();
         // 🔧 specs cache — BuildTileSpecSection 填充, RebuildMultiFloorGrid 重建时读取
-        private List<string> _specRoomTypesCache;
+        // 🔧 v19 init: 预初始化 为 空 list, 避免 BuildTileSpecSection 早退返 (无 ≥2 variant) 时下游 null scan + Allow downstream callers to use `.Count` 直接 而免 `?.`+`??`  fallback.
+        private List<string> _specRoomTypesCache = new List<string>();
         private Dictionary<string, List<TileSpecOption>> _specsDictCache;
         // 🔧 v7 模板列表 cache — BuildTileSpecSection 填充, RebuildMultiFloorGrid 后用
         private List<string> _templatesCache;
@@ -98,9 +110,12 @@ namespace BaoJiaCAD
         /// <param name="dwgName">当前 DWG 文件名（预填工程名称）</param>
         public QuotePanel(QuoteConfig config, string dwgName)
         {
+            _config = config;   // 🔧 v22 — Record for ResetToDefaults
+            _dwgName = dwgName; // 🔧 v22 — Record for ResetToDefaults
             InitializeComponent();
             BuildTileSpecSection(config);   // 🔧 根据配置动态生成规格下拉 (在 InitializeComponent 之后, 在 ApplyConfig 之前)
             ApplyConfig(config, dwgName);
+            ApplyUserOverrides();   // 🔧 v20 跨实例 UI 记忆 — 加载 user-overrides.json 后 覆盖 默认值
         }
 
         /// <summary>
@@ -239,22 +254,32 @@ namespace BaoJiaCAD
             if (floorCount < 2 || floorCount > 9) return;  // 与 NumericUpDown 上下限同步
 
             // 🔧 v9: 去掉 this.SuspendLayout / this.ResumeLayout — RebuildMultiFloorGrid 只动 TLP children (form 本身 不加 child), form-level 冻结 会造成 整体 layout 延迟
+            // 🔧 v19.1: 重建前 先快照 现存 墙高 NumericUpDown values → cache — 复式 off→on / 层数变 后 能找回手填值。
+            foreach (var kv in _multiFloorWallHeightCombos)
+                _lastPerFloorHeights[kv.Key] = (double)kv.Value.Value;
+
             _tlpMultiSpec.SuspendLayout();
             _tlpMultiSpec.Controls.Clear();
             _multiFloorCombos.Clear();
             _multiFloorTemplateCombos.Clear();
+            _multiFloorWallHeightCombos.Clear();
 
-            int cols = _specRoomTypesCache.Count + 2;     // v7: +1 模板 +1 别名
+            // 🔧 v19: cols = specCount + 3 — +1 模板 +1 别名 +1 墙高(mm) 列. 总宽: 130 + 60 + 180*specCount + 100 + 8(边框).
+            int cols = _specRoomTypesCache.Count + 3;
             int rows = floorCount + 1;                    // +1 列表头行
             _tlpMultiSpec.ColumnCount = cols;
             _tlpMultiSpec.RowCount = rows;
 
-            // 列宽: col 0=130 模板, col 1=60 别名, 余 110 规格列
+            // 列宽: col 0=130 模板, col 1=60 别名, cols 2..cols-2 = 180 规格, 末列 col cols-1=100 墙高
             _tlpMultiSpec.ColumnStyles.Clear();
             _tlpMultiSpec.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130F));
             _tlpMultiSpec.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60F));
-            for (int c = 2; c < cols; c++)
-                _tlpMultiSpec.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180F));  // 🔧 v13.3 expand: 110F 不能 装 "正铺 750*1500MM (人工71)" (~154px) — 截断 as "正铺 75C". 8 个 spec cols × 180F = 1440 + 130(template) + 60(alias) = 1630.
+            for (int c = 2; c < cols - 1; c++)
+                _tlpMultiSpec.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180F));  // 🔧 v13.3 expand: 110F 不能 装 "正铺 750*1500MM (人工71)" (~154px) — 截断 as "正铺 75C". 8 个 spec cols × 180F = 1440 + 130(template) + 60(alias) + 100(wallHeight) = 1730.
+            _tlpMultiSpec.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100F));  // 🔧 v19 末列 墙高 (mm) NumericUpDown
+            // 🔧 v19: 动态设 TLP 总宽 — 适应 specCount 变化 (3~9 spec room types 都需要 TLP 窝下)
+            int tlpTotalWidth = 130 + 60 + 180 * _specRoomTypesCache.Count + 100 + 8;
+            _tlpMultiSpec.Width = tlpTotalWidth;
             // 行高: 32px
             _tlpMultiSpec.RowStyles.Clear();
             for (int r = 0; r < rows; r++)
@@ -297,6 +322,14 @@ namespace BaoJiaCAD
                     Dock = DockStyle.Fill,
                 }, c + 2, 0);
             }
+            // 🔧 v19: 末列表头 — 墙高 (mm)
+            _tlpMultiSpec.Controls.Add(new Label
+            {
+                Text = "墙高 (mm)",
+                Font = new Font("Microsoft YaHei", 9F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Dock = DockStyle.Fill,
+            }, cols - 1, 0);
 
             // 第 2 行起: floor rows
             ComboBox[,] cells = new ComboBox[floorCount, _specRoomTypesCache.Count];
@@ -375,12 +408,25 @@ namespace BaoJiaCAD
                         ComboBox c1F = cells[0, c];
                         defaultIdx = (c1F != null && c1F.SelectedIndex >= 0) ? c1F.SelectedIndex : 1;
                     }
-                    cb.SelectedIndex = defaultIdx;
-
-                    cells[r, c] = cb;
-                    _multiFloorCombos[(floorAlias, roomType)] = cb;
-                    _tlpMultiSpec.Controls.Add(cb, c + 2, r + 1);
+                    cb.SelectedIndex = defaultIdx;                cells[r, c] = cb;
+                _multiFloorCombos[(floorAlias, roomType)] = cb;
+                _tlpMultiSpec.Controls.Add(cb, c + 2, r + 1);
                 }
+                // 🔧 v19: 末列 墙高 (mm) NumericUpDown — 默认 = 面板全局 _numWallHeight.
+                //   🔧 v19.1: 优先从 _lastPerFloorHeights cache 拼 上次用户手填值 (off→on / 跨层数 变 后); miss 才取 全局。
+                //   NumericUpDown.Minimum/Maximum 自身 限制 2000-5000, 不需手动 clamp.
+                double whDefault = _lastPerFloorHeights.TryGetValue(floorAlias, out var cached) ? cached : (double)_numWallHeight.Value;
+                var whCb = new NumericUpDown
+                {
+                    Minimum = 1000m,    // 🔧 v19.2: 2000→1000 (覆设备间/夹层 1m 以隔不可能装修)
+                    Maximum = 9000m,    // 🔧 v19.2: 5000→9000 (覆挑空客厅/大堂)
+                    Increment = 100m,
+                    Value = (decimal)whDefault,
+                    Dock = DockStyle.Fill,
+                };
+                _lastPerFloorHeights.Remove(floorAlias);   // 🔧 v19.1: 用了 cache entry 删 — 避免 楼层减少 时 残留。
+                _multiFloorWallHeightCombos[floorAlias] = whCb;
+                _tlpMultiSpec.Controls.Add(whCb, cols - 1, r + 1);
                 // 🔧 v13: master/follower 同步 — 每行 独立 跟随, 跨层 不 串.
                 var rowCombos = new Dictionary<string, ComboBox>();
                 for (int c2 = 0; c2 < _specRoomTypesCache.Count; c2++)
@@ -419,7 +465,7 @@ namespace BaoJiaCAD
             _numWallHeight = new NumericUpDown
             {
                 Left = 20 + labelW + 8, Top = y, Width = 100,
-                Minimum = 2000, Maximum = 5000, Value = 2800, Increment = 100
+                Minimum = 1000, Maximum = 9000, Value = 2800, Increment = 100   // 🔧 v19.2: 下限 2000→1000 (覆设设备间/夹层), 上限 5000→9000 (提挑空大厅/大堂)
             };
             var lblWallUnit = new Label { Text = "mm", Left = 20 + labelW + 8 + 108, Top = y, Width = 30, TextAlign = ContentAlignment.MiddleLeft };
             y += rowH + 6;
@@ -445,7 +491,8 @@ namespace BaoJiaCAD
                     _tlpMultiSpec.Visible = mf;
                     if (mf) RebuildMultiFloorGrid();
                 }
-                this.Width = mf ? 1700 : 440;  // 🔧 v13.3 expand: 880 → 1700 容纳 TLP (1630) + 20 padding × 2 = 1670 + 20 marign = 1690+10 extra.
+                // 🔧 v13.3 expand: 复式表单宽按 specCount 动态 (v19 加 墙高 列 +100px). 顺便边界安全 多 8px.
+                this.Width = mf ? (130 + 60 + 180 * (_specRoomTypesCache?.Count ?? 5) + 100 + 48) : 440;
             };
             y += rowH;
 
@@ -550,8 +597,29 @@ namespace BaoJiaCAD
                     MessageBox.Show("请输入工程名称。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
+                SaveUserOverrides();   // 🔧 v20 跨实例 UI 记忆 — OK 点击 后 序列化到 user-overrides.json
                 this.DialogResult = DialogResult.OK;
                 this.Close();
+            };
+
+            // 🔧 v22.2 「恢复默认」按钮 — 位置 顶部 row 「主操作」下方居中
+            //   与 btnStart/btnCancel 8px 间距下隔, 属于 secondary action; Resize handler 重算 保 始终居中
+            //   (multi toggle / 手动 resize / OS dpi zoom 都会 殃)。
+            _btnReset = new Button
+            {
+                Text = "恢复默认",
+                Left = 0,                                  // Resize handler 重算 (form width / 2 - btn.width / 2)
+                Top = y + 42,                              // btnStart.Bottom + 8
+                Width = 80, Height = 34,
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = SystemColors.ControlText,
+            };
+            _btnReset.Click += (s, e) =>
+            {
+                var r = MessageBox.Show(
+                    "恢复默认 会 从 user-overrides.json 清除 您 个人 UI 状态 并 把面板 重置 到 config.json 默认值。\r\n\r\n继续？",
+                    "恢复默认", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (r == DialogResult.Yes) ResetToDefaults();
             };
 
             _btnCancel = new Button
@@ -581,11 +649,28 @@ namespace BaoJiaCAD
                 lblGardenNonRoll, _numGardenNonRoll, lblGardenNonRollUnit,
                 lblDoor, _numDoorDeduct, lblDoorUnit,
                 lblWindow, _numWindowDeduct, lblWindowUnit,
-                _btnStart, _btnCancel,
+                _btnReset, _btnStart, _btnCancel,   // 🔧 v22 恢复默认 按钮 加于 最前
             });
 
             this.AcceptButton = _btnStart;
             this.CancelButton = _btnCancel;
+
+            // 🔧 v22.2 实时 居中 处理 — form 宽 变化 (multi toggle / 手动 resize / DPI zoom) 时, _btnReset 自动 重 算 Left/Top。
+            //   跟 _btnStart 走 0px 间隔 的 8px gap; _btnStart.Top 被 RebuildMultiFloorGrid 主动 重 设 时也 能跟上 (他 Bottom 变 了 ⇒ _btnReset.Top 走)。
+            this.Resize += (s, e) =>
+            {
+                if (_btnReset == null || _btnReset.IsDisposed) return;
+                if (_btnReset.Handle == IntPtr.Zero) return;
+                _btnReset.Left = Math.Max(0, (this.ClientSize.Width - _btnReset.Width) / 2);
+                if (_btnStart != null && !_btnStart.IsDisposed)
+                    _btnReset.Top = _btnStart.Bottom + 8;
+            };
+            // 初始 加载 一次性 居中 — 防止 btnReset 计算前 X=0 闪在 左边角
+            if (!this.IsDisposed && _btnReset != null && !_btnReset.IsDisposed && _btnStart != null)
+            {
+                _btnReset.Left = Math.Max(0, (this.ClientSize.Width - _btnReset.Width) / 2);
+                _btnReset.Top = _btnStart.Bottom + 8;
+            }
         }
 
         private void ApplyConfig(QuoteConfig config, string dwgName)
@@ -760,5 +845,292 @@ namespace BaoJiaCAD
             // 单楼层模式下 返空 dict — ExcelExporter 走 原单 templatePath 路径
             return map;
         }
+
+        /// <summary>
+        /// 🔧 v19 从面板里抽用户选的每层 墙高 (mm) — 复式不同层层高.
+        ///   - 单楼层 (IsMultiFloor=false): 返回空 dict (RoomDetector 走 panel.WallHeight 全局单值).
+        ///   - 复式 (IsMultiFloor=true): key=楼层别名 (e.g. "一楼", "二楼"), value=墙高 mm (NumericUpDown Value).
+        ///     Commands 进一步传给 RoomDetector, RoomDetector 创建 Room 时按 finalFloor 查找, miss 走全局 fallback.
+        /// </summary>
+        public Dictionary<string, double> GetFloorWallHeights()
+        {
+            var map = new Dictionary<string, double>();
+            if (_chkMultiFloor != null && _chkMultiFloor.Checked)
+            {
+                foreach (var kv in _multiFloorWallHeightCombos)
+                    map[kv.Key] = (double)kv.Value.Value;
+            }
+            // 单楼层模式下 返空 dict — RoomDetector 走 全局 panel.WallHeight
+            return map;
+        }
+
+        // ============== 🔧 v20 跨实例 UI 记忆 ==============
+        // 同 DLL 同存 user-overrides.json (e.g. BaoJiaCAD/bin/Debug/net48/user-overrides.json).
+        // Save: btnStart.Click 时 序列 当前 UI. Load: ctor 末尾 读 + 静默 默认 覆盖.
+        //   - 文件 缺失 / 损坏 / schema 不 合 → 静默 默认 (不 报 错).
+        //   - 项目名 (ProjectName) 不 存 — 仍 按 dwgName 重 填.
+
+        private static string _userOverridesPathCache;
+        private static string GetUserOverridesPath()
+        {
+            if (_userOverridesPathCache != null) return _userOverridesPathCache;
+            string dllDir;
+            try { dllDir = Path.GetDirectoryName(typeof(QuotePanel).Assembly.Location) ?? ""; }
+            catch { dllDir = ""; }
+            _userOverridesPathCache = Path.Combine(dllDir, "user-overrides.json");
+            return _userOverridesPathCache;
+        }
+
+        /// <summary>
+        /// 🔧 v22 「恢复默认」实现 — 删 user-overrides.json + in-memory UI state 重 写 为 config.json 默认值。
+        ///   - 不动 InitializeComponent (不重建 控件), 避免 重复 添加 Items 双 拷贝。
+        ///   - 仅 设 值 — NumericUpDown.Value / CheckBox.Checked / ComboBox.SelectedIndex。
+        ///   - 复式 开关 一 律 关, _lastPerFloorHeights 缓存 清, 让 用户 重新 选 复式 后 rebuild 拿 默认。
+        /// </summary>
+        private void ResetToDefaults()
+        {
+            // 1. 删 user-overrides.json — 静默 (文件 不 存 或 只 读 盘 都不 阻 挡)
+            try
+            {
+                string path = GetUserOverridesPath();
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch { /* silent */ }
+
+            // 2. 工程名称 (重 设 回 dwgName; 空 时 用 默 "未命名工程" 占位)
+            _txtProjectName.Text = string.IsNullOrWhiteSpace(_dwgName) ? "未命名工程" : _dwgName;
+
+            // 3. 总 墙高 → config.DefaultWallHeight
+            try { _numWallHeight.Value = (decimal)(_config?.DefaultWallHeight ?? 2800.0); }
+            catch { }
+
+            // 4. 复式 开关 (默认 关) + 层数 = 2 — 不 调 CheckedChanged handler 主动 设 false 也 可, handler 会 自己 跑 隐藏 _tlpMultiSpec
+            if (_chkMultiFloor.Checked)
+            {
+                _chkMultiFloor.Checked = false;
+                // CheckedChanged handler 会 隐藏 _tlpMultiSpec / 重 算 form 宽. 不 需 手动.
+            }
+            try { _numFloorCount.Value = 2; } catch { }
+
+            // 5. 单层 模板 下拉 重 选 config.TemplateSettings.ActiveTemplate (index 0 fallback)
+            string activeTpl = _config?.TemplateSettings?.ActiveTemplate ?? "dizhuan";
+            int tplIdx = _cmbTemplate.Items.IndexOf(activeTpl);
+            if (tplIdx >= 0) _cmbTemplate.SelectedIndex = tplIdx;
+
+            // 6. 防水参数 — 8 个 NumericUpDown 重 写 config.BathroomKitchenDefaults 对 应 值
+            var defs = _config?.BathroomKitchenDefaults;
+            if (defs != null)
+            {
+                TryResetNumeric(_numBathWaterproof, defs.WaterproofHeight);
+                TryResetNumeric(_numTileHeight, defs.TileHeight);
+                TryResetNumeric(_numDoorDeduct, defs.DefaultDoorDeduct);
+                TryResetNumeric(_numWindowDeduct, defs.DefaultWindowDeduct);
+                TryResetNumeric(_numKitchenWaterproof, defs.KitchenWaterproofHeight);
+                TryResetNumeric(_numBalconyWaterproof, defs.BalconyWaterproofHeight);
+                TryResetNumeric(_numGardenRoll, defs.OutdoorGardenRollHeight);
+                TryResetNumeric(_numGardenNonRoll, defs.OutdoorGardenNonRollHeight);
+            }
+
+            // 7. 单层 spec ComboBox 重 选 默认 (复用 BuildTileSpecSection 中 cb 设置 默认 逻辑:
+            //      - 1F 用 isDefault+0 (NONE prepended → +1); 失配 → 走 NONE / index 1)
+            foreach (var kv in _tileSpecCombos)
+            {
+                string roomType = kv.Key;
+                List<TileSpecOption> list = _specsDictCache?[roomType];
+                int defaultSpecIdx = -1;
+                if (list != null)
+                {
+                    for (int s = 0; s < list.Count; s++)
+                        if (list[s] != null && list[s].IsDefault) { defaultSpecIdx = s; break; }
+                }
+                defaultSpecIdx = defaultSpecIdx >= 0 ? defaultSpecIdx : 0;
+                int idx = 1 + defaultSpecIdx;   // 0=NONE, 1=list[0]
+                if (idx >= 0 && idx < kv.Value.Items.Count) kv.Value.SelectedIndex = idx;
+            }
+
+            // 8. 清 v19.1 _lastPerFloorHeights 跨-rebuild 缓存 — 避免 dirty 数据 残留, 下 次 re-toggle multi-floor rebuild 用 默认。
+            _lastPerFloorHeights.Clear();
+        }
+
+        /// <summary>v22 辅助 — 重 置 NumericUpDown 为 给定 double 值, 越界 静默 跳过。</summary>
+        private static void TryResetNumeric(NumericUpDown nud, double v)
+        {
+            try
+            {
+                if (v < (double)nud.Minimum || v > (double)nud.Maximum) return;
+                nud.Value = (decimal)v;
+            }
+            catch { }
+        }
+
+        /// <summary>读 上次 OK 点 保存 的 UI 状态 并 覆盖 当前 默认。</summary>
+        private void ApplyUserOverrides()
+        {
+            UserUIOverrides ov = null;
+            try
+            {
+                string path = GetUserOverridesPath();
+                if (!File.Exists(path)) return;
+                ov = JsonConvert.DeserializeObject<UserUIOverrides>(File.ReadAllText(path));
+                if (ov == null || ov.SchemaVersion != UserUIOverrides.CurrentSchemaVersion) return;
+            }
+            catch { return; }   // 静默 — 损坏 / 类型 错 / DesignException
+
+            // Phase 1: 简单 字段 — NumericUpDown / 单层 模板 ComboBox
+            //   ⚠ _chkMultiFloor.Checked 不 调 → 不 trigger CheckedChanged → RebuildMultiFloorGrid 不 跑
+            //   所以 保 global _numWallHeight 默认 (用 上 调 _numWallHeight) 为 未来 multi 默认 起点
+            ApplyNumericIfInRange(_numWallHeight, ov.WallHeight);
+            if (ov.FloorCount >= (int)_numFloorCount.Minimum && ov.FloorCount <= (int)_numFloorCount.Maximum)
+                ApplyNumericIfInRange(_numFloorCount, ov.FloorCount);
+            ApplyComboByItemText(_cmbTemplate, ov.SelectedTemplate);
+            ApplyNumericIfInRange(_numBathWaterproof, ov.BathWaterproofHeight);
+            ApplyNumericIfInRange(_numTileHeight, ov.TileHeight);
+            ApplyNumericIfInRange(_numDoorDeduct, ov.DoorDeduct);
+            ApplyNumericIfInRange(_numWindowDeduct, ov.WindowDeduct);
+            ApplyNumericIfInRange(_numKitchenWaterproof, ov.KitchenWaterproofHeight);
+            ApplyNumericIfInRange(_numBalconyWaterproof, ov.BalconyWaterproofHeight);
+            ApplyNumericIfInRange(_numGardenRoll, ov.GardenRollHeight);
+            ApplyNumericIfInRange(_numGardenNonRoll, ov.GardenNonRollHeight);
+
+            // 单层 spec Pull: ov.SpecSelections 中 key 为 ""|RoomType (Phase 1 完成)
+            foreach (var kv in ov.SpecSelections ?? new Dictionary<string, string>())
+            {
+                string[] parts = (kv.Key ?? "").Split('|');
+                if (parts.Length != 2) continue;
+                if (string.IsNullOrEmpty(parts[0]) && !string.IsNullOrEmpty(parts[1]))
+                {
+                    if (_tileSpecCombos.TryGetValue(parts[1], out var cb))
+                        ApplyComboByValueOrLabel(cb, kv.Value);
+                }
+            }
+
+            // Phase 2: 复式 — 调 CheckedChanged → RebuildMultiFloorGrid 同步 跑; 完成后 找回 上次 每列 值
+            if (ov.IsMultiFloor && !_chkMultiFloor.Checked)
+                _chkMultiFloor.Checked = true;   // 触发 CheckedChanged sync rebuild (同步)
+            // 🔧 v20.1 修复: 独立 Patch 区 — 无论 是否 只 才 才 toggle, 只要 ov.IsMultiFloor 就 走 patch。
+            //   此前 patch 藏 在 trigger 内, 启动时 _chkMultiFloor.Checked 已 true (隐含 ctor) 会 静默 跳过。
+            if (ov.IsMultiFloor)
+            {
+                // 现在 _multiFloorCombos / _multiFloorTemplateCombos / _multiFloorWallHeightCombos 都 装 上 了
+                foreach (var kv in ov.SpecSelections ?? new Dictionary<string, string>())
+                {
+                    string[] parts = (kv.Key ?? "").Split('|');
+                    if (parts.Length != 2) continue;
+                    if (!string.IsNullOrEmpty(parts[0]) && !string.IsNullOrEmpty(parts[1]))
+                    {
+                        if (_multiFloorCombos.TryGetValue((parts[0], parts[1]), out var cb))
+                            ApplyComboByValueOrLabel(cb, kv.Value);
+                    }
+                }
+                foreach (var kv in ov.MultiFloorTemplates ?? new Dictionary<string, string>())
+                    if (_multiFloorTemplateCombos.TryGetValue(kv.Key, out var cb))
+                        ApplyComboByItemText(cb, kv.Value);
+                foreach (var kv in ov.MultiFloorWallHeights ?? new Dictionary<string, double>())
+                    if (_multiFloorWallHeightCombos.TryGetValue(kv.Key, out var nud))
+                        ApplyNumericIfInRange(nud, kv.Value);
+            }
+        }
+
+        /// <summary>OK 点 后 抓 当前面板 UI 状态 序列 化 为 user-overrides.json。</summary>
+        private void SaveUserOverrides()
+        {
+            try
+            {
+                bool isMulti = _chkMultiFloor != null && _chkMultiFloor.Checked;
+                var ov = new UserUIOverrides
+                {
+                    SchemaVersion = UserUIOverrides.CurrentSchemaVersion,
+                    WallHeight = WallHeight,
+                    IsMultiFloor = isMulti,
+                    FloorCount = FloorCount,
+                    SelectedTemplate = SelectedTemplate,
+                    BathWaterproofHeight = BathWaterproofHeight,
+                    TileHeight = TileHeight,
+                    DoorDeduct = DoorDeduct,
+                    WindowDeduct = WindowDeduct,
+                    KitchenWaterproofHeight = KitchenWaterproofHeight,
+                    BalconyWaterproofHeight = BalconyWaterproofHeight,
+                    GardenRollHeight = OutdoorGardenRollHeight,
+                    GardenNonRollHeight = OutdoorGardenNonRollHeight,
+                };
+                // spec selections — 统一编码 「Floor|Room」(单层 空 floor 前缀)，
+                //   与 Commands 运行时SelectedTileSpecs 完全 兼容 (Commands 那里 “|{Room}” 兑底走 k2 也 看到)
+                var specs = GetTileSpecSelections(); // 🔧 v20.1: 删 死 三 元 — 两 arts 同 返。
+                if (!isMulti)
+                {
+                    var renamed = new Dictionary<string, string>();
+                    foreach (var kv in specs) renamed[$"|{kv.Key}"] = kv.Value;
+                    ov.SpecSelections = renamed;
+                }
+                else
+                {
+                    ov.SpecSelections = specs;   // 复式 已是 「一楼|客餐厅」 等
+                }
+                ov.MultiFloorTemplates = GetFloorTemplateSelections();
+                ov.MultiFloorWallHeights = GetFloorWallHeights();
+
+                File.WriteAllText(GetUserOverridesPath(), JsonConvert.SerializeObject(ov, Formatting.Indented));
+            }
+            catch { /* silent — 写 盘 失败 不应 阻 BJ 主流程 */ }
+        }
+
+        private static void ApplyNumericIfInRange(NumericUpDown nud, double v)
+        {
+            try
+            {
+                if (v < (double)nud.Minimum || v > (double)nud.Maximum) return;
+                nud.Value = (decimal)v;
+            }
+            catch { }
+        }
+
+        private static void ApplyComboByItemText(ComboBox cb, string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            int idx = cb.Items.IndexOf(text);
+            if (idx >= 0) cb.SelectedIndex = idx;
+        }
+
+        /// <summary>匹配 spec ComboBox 中 Value 等 于 targetValue 的 item; 失配 回 退 匹配 text (NONE 项 使用 Value "&lt;NONE&gt;" 检测)。</summary>
+        private static void ApplyComboByValueOrLabel(ComboBox cb, string targetValue)
+        {
+            if (string.IsNullOrEmpty(targetValue)) return;
+            foreach (object item in cb.Items)
+            {
+                if (item is TileSpecOption opt && opt.Value == targetValue)
+                {
+                    int idx = cb.Items.IndexOf(opt);
+                    if (idx >= 0) { cb.SelectedIndex = idx; return; }
+                }
+            }
+            int tidx = cb.Items.IndexOf(targetValue);
+            if (tidx >= 0) cb.SelectedIndex = tidx;
+        }
+    }
+
+    /// <summary>🔧 v20 用户 UI 上次输入状态 — user-overrides.json DTO。与 config.json 并行, user-specific, 跨项目 一致。</summary>
+    public class UserUIOverrides
+    {
+        public const int CurrentSchemaVersion = 1;
+
+        public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+        public double WallHeight { get; set; }
+        public bool IsMultiFloor { get; set; }
+        public int FloorCount { get; set; }
+        public string SelectedTemplate { get; set; }
+
+        /// <summary>spec selections — 统一 「Floor|Room」 编码 (单层 空 floor 前缀)。</summary>
+        public Dictionary<string, string> SpecSelections { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> MultiFloorTemplates { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, double> MultiFloorWallHeights { get; set; } = new Dictionary<string, double>();
+
+        public double BathWaterproofHeight { get; set; }
+        public double TileHeight { get; set; }
+        public double DoorDeduct { get; set; }
+        public double WindowDeduct { get; set; }
+        public double KitchenWaterproofHeight { get; set; }
+        public double BalconyWaterproofHeight { get; set; }
+        public double GardenRollHeight { get; set; }
+        public double GardenNonRollHeight { get; set; }
     }
 }

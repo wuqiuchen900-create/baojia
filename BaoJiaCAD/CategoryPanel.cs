@@ -82,7 +82,8 @@ namespace BaoJiaCAD
                 var rs = bucketed.TryGetValue(cat, out var list) ? list : new List<Room>();
                 double floorTotal = rs.Sum(r => r.FloorArea);
                 double perimTotal = rs.Sum(r => r.Perimeter);
-                double wallTotal = floorTotal + perimTotal * wallHeight / 1000.0;
+                // 🔧 v19: 复用 Room.WallArea getter (per-room wallHeight 已在 RoomDetector 设). 单一公式源头 — v17.x 扣减 改动 自动跟.
+                double wallTotal = rs.Sum(r => r.WallArea);
 
                 editor.WriteMessage($"\n[{cat}]  {rs.Count} 个房间");
                 editor.WriteMessage($"\n        地面合计: {floorTotal:F2} ㎡");
@@ -95,15 +96,16 @@ namespace BaoJiaCAD
                                           .OrderBy(g => g.Key))
                     {
                         double fG = fg.Sum(r => r.FloorArea);
-                        double pG = fg.Sum(r => r.Perimeter);
-                        double wG = fG + pG * wallHeight / 1000.0;
+                        // 🔧 v19: 各房 r.WallArea 直接 拉 — 同 fg 同一 floor 同 wallHeight 一般 自然 一致.
+                        double wG = fg.Sum(r => r.WallArea);
                         editor.WriteMessage($"\n    [{fg.Key}] {fg.Count()} 个房间  地面 {fG:F2} ㎡  墙顶 {wG:F2} ㎡");
                     }
                 }
 
                 foreach (var r in rs.OrderBy(r => r.FloorLevel + "|" + r.Name))
                 {
-                    double wall = r.FloorArea + r.Perimeter * wallHeight / 1000.0;
+                    // 🔧 v19: 直接 读 r.WallArea (per-room wallHeight getter, 复式 同 floor 同 wallHeight 自然一致).
+                    double wall = r.WallArea;
                     editor.WriteMessage(
                         $"\n    - [{r.FloorLevel}] {r.Name} (地面 {r.FloorArea:F2} ㎡, 墙顶 {wall:F2} ㎡)");
                 }

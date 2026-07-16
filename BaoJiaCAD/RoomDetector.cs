@@ -54,13 +54,18 @@ namespace BaoJiaCAD
         private readonly QuoteConfig _config;
         private readonly double _wallHeight;
         private readonly List<DetectedBoundary> _previousBoundaries;
+        // 🔧 v19: 复式 每层墙高 字典 — key=楼层别名 (e.g. "一楼", "二楼"), value=墙高 mm.
+        //   复式不同 层 不同 墙高 (eg 1F=2800 / 2F=2600 / 3F=3000). null = 走全局 _wallHeight.
+        private readonly Dictionary<string, double> _floorWallHeights;
 
         public RoomDetector(QuoteConfig config, double wallHeight,
-            List<DetectedBoundary> previousBoundaries = null)
+            List<DetectedBoundary> previousBoundaries = null,
+            Dictionary<string, double> floorWallHeights = null)
         {
             _config = config;
             _wallHeight = wallHeight;
             _previousBoundaries = previousBoundaries ?? new List<DetectedBoundary>();
+            _floorWallHeights = floorWallHeights ?? new Dictionary<string, double>();
         }
 
         /// <summary>
@@ -159,7 +164,11 @@ namespace BaoJiaCAD
                         FloorLevel = finalFloor,
                         FloorArea = area,
                         Perimeter = perimeter,
-                        WallHeight = _wallHeight,
+                        // 🔧 v19: 复式每层 独立 墙高 — 查 _floorWallHeights dict (key=finalFloor), miss fallback 到 全局 _wallHeight.
+                        //   单层 (IsMultiFloor=false) 时 panel.GetFloorWallHeights() 返回空 dict, 全体 miss → fallback 全局值.
+                        WallHeight = (!string.IsNullOrEmpty(finalFloor)
+                                      && _floorWallHeights.TryGetValue(finalFloor, out double flh))
+                                      ? flh : _wallHeight,
                         // 🔧 v16: 内存 Polyline 克隆 — AutoCAD temp polyline 随 tr 而死.
                         //   WindowBoxDetector 在 DetectRooms 之后 Read polyline → 必须克隆到自有实例 (Commands 终态 Dispose 清理).
                         BoundaryPolyline = ClonePolylineToMemory(boundary)

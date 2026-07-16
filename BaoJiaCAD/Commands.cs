@@ -84,6 +84,17 @@ namespace BaoJiaCAD
                         editor.WriteMessage($"\n[模板]   {kv.Key} -> {kv.Value}");
                 }
 
+                // 🔧 v19 面板每层 墙高 (mm) 回写到 config.SelectedFloorWallHeights
+                //   - 单层返空 dict, RoomDetector 走全局 panel.WallHeight (走模板 Global 单路径)
+                //   - 复式返 floor→heightMM, RoomDetector 创建 Room 时按 finalFloor 查表
+                config.SelectedFloorWallHeights = panel.GetFloorWallHeights();
+                if (config.SelectedFloorWallHeights.Count > 0)
+                {
+                    editor.WriteMessage($"\n[墙高] v19 复式 每层 墙高:");
+                    foreach (var kv in config.SelectedFloorWallHeights)
+                        editor.WriteMessage($"\n[墙高]   {kv.Key} -> {kv.Value}mm");
+                }
+
                 // 5. 循环识别每层
                 var allRooms = new List<Room>();
                 var confirmedBoundaries = new List<DetectedBoundary>();
@@ -127,7 +138,7 @@ namespace BaoJiaCAD
                             editor.WriteMessage($"\n[scope] 本 层 框 选 {sel.Value.Count} 个, 累 计 unique {globalSelectionScope.Count} 个 (+{globalSelectionScope.Count - before})");
                         }
 
-                        var detector = new RoomDetector(config, wallHeight, confirmedBoundaries);
+                        var detector = new RoomDetector(config, wallHeight, confirmedBoundaries, config.SelectedFloorWallHeights);
                         var result = detector.DetectRooms(editor, sel.Value, currentFloorAlias, isMultiFloor);
 
                         if (result.Rooms.Count == 0)

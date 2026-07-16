@@ -1159,11 +1159,11 @@ namespace BaoJiaCAD
             double floorArea = Math.Round(room.FloorArea, 1, MidpointRounding.AwayFromZero);
 
             // 🔧 v14 fix(reviewer 1): C9 marker 用 PHASE A 同模式 — 保留 原 备注 + 仅 strip 旧 v14 marker 再 加 新.
+            // 🔧 v18: 用户要求 I 列备注栏不写诊断 marker — writeMarker 现在只输出 Debug 日志, 表格 I 列保持空白.
+            //   排查时仍能在命令行看到所有原本会写入 I 列的 marker 内容.
             Action<int, string> writeMarker = (row, marker) =>
             {
-                string rawDesc = CellString(ws.Cell(row, 9)) ?? string.Empty;
-                string cleaned = Regex.Replace(rawDesc, @"\n?【v14 mudiban 客None:.*?】", string.Empty, RegexOptions.Singleline).TrimEnd('\n', '\r');
-                ws.Cell(row, 9).Value = (cleaned.Length == 0 ? marker : cleaned + "\n" + marker);
+                Debug($"  [v18 I列 marker skip → R{row}] {marker}");
             };
             // 🔧 v14 fix(reviewer 2): existing 「地面找平」 detection FIRST — 修 CS0841 (之前 是 另一个 后序 块调用了 existingFloorLevelingRow 才 声明)。
             TemplateItem existingFloorLevelingRow = group.Items.FirstOrDefault(i =>
@@ -1462,11 +1462,8 @@ namespace BaoJiaCAD
                                 ws.Cell(item.Row, 2).Value = c2New;
                                 Debug($"    [单规格 rewrite C2] 行{item.Row}: [{item.Name}] -> [{c2New}] (规格={selectedSpecCached})");
                             }
-                            // 清掉历史 marker（防同一行跨多次跑多规格造成 stack），只留最新一个
-                            string rawDesc = CellString(ws.Cell(item.Row, 9)) ?? string.Empty;
-                            string desc = Regex.Replace(rawDesc, @"\n?\u3010\u5df2\u5e94\u7528\u89c4\u683c:.*?\u3011", string.Empty, RegexOptions.Singleline).TrimEnd('\n', '\r');
-                            string marker = "\u3010\u5df2\u5e94\u7528\u89c4\u683c: " + (opt.Label ?? selectedSpecCached) + "\u3011";
-                            ws.Cell(item.Row, 9).Value = (desc.Length == 0 ? marker : desc + "\n" + marker);
+                            // 🔧 v18: 用户要求 I 列备注栏不写 【已应用规格: ...】 marker — 该 5 行块删除, 表格 I 列保持空白.
+                            //   排查时仍能依靠邻近 Debug log 看到规格落地.
                         }
                     }
                     else

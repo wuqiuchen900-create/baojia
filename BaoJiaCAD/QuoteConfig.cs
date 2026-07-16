@@ -61,6 +61,17 @@ namespace BaoJiaCAD
         public Dictionary<string, string> SelectedFloorTemplates { get; set; } = new Dictionary<string, string>();
 
         /// <summary>
+        /// 🔧 v19 本次报价运行时 用户面板选的 各层 墙高 (mm). 复式不同层层高 (e.g. 1F=2800mm / 2F=2600mm / 3F=3000mm).
+        /// 键: 楼层别名 (e.g. "一楼", "二楼", "三楼", ..., "九楼" — 与 QuotePanel._floorAliases 同步).
+        /// 值: 墙高 mm (NumericUpDown 输入, 默认 2800).
+        /// 由 Commands 从面板写入, RoomDetector 读取 — 创建 Room.WallHeight 时按 finalFloor 查找, lookup miss fallback 到全局 panel.WallHeight.
+        /// 单层 (IsMultiFloor=false) 时 不使用 (面板 GetFloorWallHeights() 返回空 dict), 走全局 panel.WallHeight / config.DefaultWallHeight 单值.
+        /// 不会被 Save() (不持久化, 每次 BJ 重填).
+        /// </summary>
+        [JsonIgnore]
+        public Dictionary<string, double> SelectedFloorWallHeights { get; set; } = new Dictionary<string, double>();
+
+        /// <summary>
         /// 从 JSON 文件加载配置
         /// </summary>
         public static QuoteConfig Load(string path)
