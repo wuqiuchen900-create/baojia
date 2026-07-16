@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
 
@@ -29,6 +29,13 @@ namespace BaoJiaCAD
 
         /// <summary>厨卫 / 特殊房间默认测算参数 (门窗洞减、贴瓷片高、防水高等) 走 config.json 可调</summary>
         public BathroomKitchenDefaults BathroomKitchenDefaults { get; set; } = new BathroomKitchenDefaults();
+
+        // v17.5: scope-filter opt.
+        //   true = only scan entities in user selection (user mental model).
+        //   false = keep legacy behavior (full DWG scan). Default true fixes v16.x bug
+        //   where WindowBox/WindowArea detectors scanned entire ModelSpace,
+        //   causing cross-floor matching and noise overflow.
+        public bool HonorSelectionScope { get; set; } = true;
 
         /// <summary>
         /// 本次报价运行时用户选的瓷砖规格 (由 Commands 从面板写入, ExcelExporter 读取; 不持久化).
@@ -86,6 +93,10 @@ namespace BaoJiaCAD
                 cfg.BathroomKitchenDefaults.OutdoorGardenRollHeight = 0.8;
             if (cfg.BathroomKitchenDefaults.OutdoorGardenNonRollHeight <= 0)
                 cfg.BathroomKitchenDefaults.OutdoorGardenNonRollHeight = 0.6;
+            // v17.5: ensure HonorSelectionScope defaults true. NewtonSoft.Json with missing JSON key can leave the
+            //   property at default(bool)=false even though the class initializer sets true. Force-set backfill here
+            //   so user mental model "默认 scope 框选 on" holds — opt-out can come in a later release.
+            cfg.HonorSelectionScope = true;
             return cfg;
         }
 

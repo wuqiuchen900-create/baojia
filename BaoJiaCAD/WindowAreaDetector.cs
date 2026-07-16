@@ -45,7 +45,9 @@ namespace BaoJiaCAD
         private const double BO_ToleranceMM = 50.0;
 
         public static void DetectWindowAreas(
-            List<Room> rooms, Editor editor, QuoteConfig config, Action<string> log)
+            List<Room> rooms, Editor editor, QuoteConfig config, Action<string> log,
+            // v17.5: scopeIds = null = 后 向 兼 容 (全 DWG 扫), 不 null = 仅 扫 user 框 选 中 entities.
+            HashSet<ObjectId> scopeIds = null)
         {
             if (rooms == null || rooms.Count == 0) return;
             if (log == null) log = _ => { };
@@ -70,7 +72,7 @@ namespace BaoJiaCAD
                     return;
                 }
 
-                var textLabels = CollectTextLabelsRaw(editor.Document.Database, tr, log);
+                var textLabels = CollectTextLabelsRaw(editor.Document.Database, tr, log, scopeIds);
                 log("[窗户面积] DWG 文本扫描完成 — " + textLabels.Count + " 个 CH/ZH/DH/SH 标签");
                 // 🔧 v17.3 round3 reviewer C1: 入 口 文 档 化 log, 让 user 知 「无 分隔 符 CH1500 不 支 持」
                 log("[窗户面积] 注意: 标签必须含分隔符 (= : # ＝ : - , 任选一); 无分隔符写法 (如 「CH1500」) 暂不支持");
@@ -303,7 +305,8 @@ namespace BaoJiaCAD
             public Point2d Position;
         }
 
-        private static List<Line> CollectWindowLinesRaw(Database db, Transaction tr, Action<string> log)
+        private static List<Line> CollectWindowLinesRaw(Database db, Transaction tr, Action<string> log,
+            HashSet<ObjectId> scopeIds = null)
         {
             var result = new List<Line>();
             try
@@ -341,7 +344,9 @@ namespace BaoJiaCAD
             return result;
         }
 
-        private static List<TextLabel> CollectTextLabelsRaw(Database db, Transaction tr, Action<string> log)
+        private static List<TextLabel> CollectTextLabelsRaw(Database db, Transaction tr, Action<string> log,
+            // v17.5: scopeIds = null = 后 向 兼 容 (全 DWG 扫), 不 null = 仅 扫 user 框 选 中 text 实体.
+            HashSet<ObjectId> scopeIds = null)
         {
             var result = new List<TextLabel>();
             try
@@ -355,6 +360,9 @@ namespace BaoJiaCAD
                 {
                     try
                     {
+                        // v17.5: scope filter — 同 步 line collector.
+                        // 体 此 window-and-label 「同 scope」 表达 user 选 框 是 哪种 计 算 范围.
+                        if (scopeIds != null && id != ObjectId.Null && !scopeIds.Contains(id)) continue;
                         string cls = id.ObjectClass.Name;
                         if (!cls.Equals("AcDbText", StringComparison.OrdinalIgnoreCase)
                             && !cls.Equals("AcDbMText", StringComparison.OrdinalIgnoreCase))

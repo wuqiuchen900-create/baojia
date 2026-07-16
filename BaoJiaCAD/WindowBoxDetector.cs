@@ -31,7 +31,9 @@ namespace BaoJiaCAD
         private const double MinWindowLengthMM = 400.0;
 
         public static void DetectCurtainBoxLengths(
-            List<Room> rooms, Editor editor, QuoteConfig config, Action<string> log)
+            List<Room> rooms, Editor editor, QuoteConfig config, Action<string> log,
+            // v17.5: scopeIds = null = 后 向 兼 容 (全 DWG 扫), 不 null = 仅 扫 user 框 选 中 entities.
+            HashSet<ObjectId> scopeIds = null)
         {
             if (rooms == null || rooms.Count == 0) return;
             if (log == null) log = _ => { };
@@ -227,7 +229,8 @@ namespace BaoJiaCAD
         }
 
         // 扫 ModelSpace 中所有 Line entities, 过滤 (Layer = 窗户 OR 显式 ColorIndex 251).
-        private static List<Line> CollectWindowLines(Database db, Transaction tr, Action<string> log)
+        private static List<Line> CollectWindowLines(Database db, Transaction tr, Action<string> log,
+            HashSet<ObjectId> scopeIds = null)
         {
             var result = new List<Line>();
             try
@@ -241,6 +244,8 @@ namespace BaoJiaCAD
                 {
                     try
                     {
+                        // v17.5: scope filter — 仅 HonorSelectionScope 时 跳 出 user 框 选 外 的 entities
+                        if (scopeIds != null && id != ObjectId.Null && !scopeIds.Contains(id)) continue;
                         if (!id.ObjectClass.Name.Equals("AcDbLine", StringComparison.OrdinalIgnoreCase))
                             continue;
                         var line = tr.GetObject(id, OpenMode.ForRead) as Line;

@@ -676,6 +676,7 @@ foreach (var g in _previousBoundaries)     // 跨层已识别
 | TODO 4 | Helper 名 `ApplyLivingRoomNoneMudiban` stale | rename 为 `ApplyNoneMudibanTilegRoundRoom` |
 | TODO 5 | 「石材铺贴」 等 exotic 行 (无 MM+砖keyword) 漏 | zero-fill fallback 已加 keyword gate, 仍是 95% cover |
 | TODO 6 | config-driven rename 「→地面找平」 | 加 QuoteConfig.json `MudibanNoneNewName` entry |
+| Issue 7 | v17.5 实测主卧窗户匹配收窄：v17.4 主卧=6扇13.06㎡（含客餐厅 2137E 9.17m 长 line + 0.057m×2 装饰 fragment，被错配 ZH=1960）→ v17.5 主卧=2扇3.07㎡（仅 2137C 2.29m + 21389 0.84m）。客户端 v17.4/v17.5 同一 9 房 overlay | 待查：根因是 scope filter partial 拦截，还是 v17.3 round4 IgnoreCase+strip 简化副作用？需开 DWG 检查 2137E 实体几何（mid 是否落在主卧 BO）+ 9 个房间 BO 几何闭包，在 Linux 单跑 WindowAreaDetector 单单件复刻辨难 |
 
 ---
 

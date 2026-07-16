@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Windows.Forms;
@@ -91,6 +91,10 @@ namespace BaoJiaCAD
                 var allSkipped = new List<SkippedTextInfo>();
 
                 bool exporting = false;
+
+                // v17.5: 跨 层 框 选 entity id union — 传 给 WindowBox / WindowArea
+                var globalSelectionScope = new HashSet<ObjectId>();
+
                 for (int floorIdx = 0; floorIdx < floorCount && !exporting; floorIdx++)
                 {
                     string currentFloorAlias = isMultiFloor ? FloorAliases[floorIdx] : "";
@@ -110,6 +114,17 @@ namespace BaoJiaCAD
                         {
                             editor.WriteMessage("\n未选择对象，命令取消。");
                             return;
+                        }
+
+
+
+                        // v17.5: 本 层 框 选 entities 入 全 层 union, 给 WindowBox / WindowArea scope 用.
+                        if (sel.Value != null)
+                        {
+                            int before = globalSelectionScope.Count;
+                            foreach (var oid in sel.Value.GetObjectIds())
+                                globalSelectionScope.Add(oid);
+                            editor.WriteMessage($"\n[scope] 本 层 框 选 {sel.Value.Count} 个, 累 计 unique {globalSelectionScope.Count} 个 (+{globalSelectionScope.Count - before})");
                         }
 
                         var detector = new RoomDetector(config, wallHeight, confirmedBoundaries);
@@ -224,11 +239,13 @@ namespace BaoJiaCAD
 
                 // 🔧 v16: 窗帘盒长度检测 — 扫 DWG 找出每个房间 覆盖窗户的墙段, 累加 (米) -> room.CurtainBoxLength.
                 //   在 ExcelExporter 导出前调, 这样 Excel 填充时 IsCurtainBoxItem 路径读到 CurtainBoxLength 已 > 0.
-                WindowBoxDetector.DetectCurtainBoxLengths(allRooms, editor, config, msg => editor.WriteMessage($"\n{msg}"));
+                // v17.5: scope filter — 仅 HonorSelectionScope 时 传 入 跨 层 框 选 union
+                HashSet<ObjectId> scope = config.HonorSelectionScope ? globalSelectionScope : null;
+                WindowBoxDetector.DetectCurtainBoxLengths(allRooms, editor, config, msg => editor.WriteMessage($"\n{msg}"), scope);
 
                 // 🔧 v17.2: 窗户面积检测 — 独立 出 WindowAreaDetector。与 CurtainBox 互不调 用, 扫同一 Source (窗户 图层 OR 251 颜色)
                 //   但 后续 房间 归属 / 标签 拾取 完全 并行 类。结果存 Room.WindowArea (㎡)。FillRoomData 下 游 3 个墙项 扣减 需 读 此 值。
-                WindowAreaDetector.DetectWindowAreas(allRooms, editor, config, msg => editor.WriteMessage($"\n{msg}"));
+                WindowAreaDetector.DetectWindowAreas(allRooms, editor, config, msg => editor.WriteMessage($"\n{msg}"), scope);
 
                 // 🔧 v16.1 fix (round-3 reviewer Q2): 同步刷 room.Items + 清理 in-memory Polyline 克隆 都 移到 exporter 之前.
                 //   (reviewer #4 nice-to-have: 该 段 在 finally 更稳 — 但 C# 要求 catch 必须在 finally 前, 加 江西 not 不 优美.
