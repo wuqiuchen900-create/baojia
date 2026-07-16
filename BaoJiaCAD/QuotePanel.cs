@@ -30,13 +30,13 @@ namespace BaoJiaCAD
         private NumericUpDown _numBalconyWaterproof;
         private NumericUpDown _numGardenRoll;
         private NumericUpDown _numGardenNonRoll;
-        private Button _btnStart;
+        private GlassButton _btnStart;    // 🔧 v23 GlassButton — 现在 为 玻璃风格「开始」按钮
         // 🔧 v9.2: BuildTileSpecSection pushUp 后的 初始 form 高, RebuildMultiFloorGrid 作为 下穿底, 不硬编码 760 漂移.
         //   防御默认 = 760 — 万一 BuildTileSpecSection 提前 return (空 TileSpecOptions) 字段 为 0 防 Math.Max 跌破 原 layout
         private int _initialFormHeight = 760;
-        private Button _btnCancel;
+        private GlassButton _btnCancel;   // 🔧 v23 GlassButton — 玻璃风格「取消」按钮
         // 🔧 v22: 「恢复默认」按钮 — 删除 user-overrides.json + 重置 内存 state 到 config.json 默认值。
-        private Button _btnReset;
+        private GlassButton _btnReset;    // 🔧 v23 GlassButton — 玻璃风格「恢复默认」按钮
         // 🔧 v22: 记住 上次 ctor 传入 的 config/dwgName — ResetToDefaults 需要 重 填 默认值 时 用。
         private readonly QuoteConfig _config;
         private readonly string _dwgName;
@@ -582,14 +582,12 @@ namespace BaoJiaCAD
             var lblWindowUnit = new Label { Text = "㎡", Left = col2x + labelW + 8 + 78, Top = y, Width = 30, TextAlign = ContentAlignment.MiddleLeft };
             y += rowH + 12;
 
-            // ── 按钮 ──
-            _btnStart = new Button
+            // ── 按钮 · 🔧 v23 玻璃风格 (GlassButton) ──
+            //   主操作 「开始识别」 — 用 玻璃 默认蓝主色 (Top=亮蓝/Bottom=主蓝)— 最醒目 primary action
+            _btnStart = new GlassButton
             {
                 Text = "开始识别", Left = 100, Top = y, Width = 100, Height = 34,
-                BackColor = Color.FromArgb(0, 122, 204), ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat, Font = new Font("Microsoft YaHei", 9F, FontStyle.Bold)
             };
-            _btnStart.FlatAppearance.BorderSize = 0;
             _btnStart.Click += (s, e) =>
             {
                 if (string.IsNullOrWhiteSpace(_txtProjectName.Text))
@@ -605,14 +603,17 @@ namespace BaoJiaCAD
             // 🔧 v22.2 「恢复默认」按钮 — 位置 顶部 row 「主操作」下方居中
             //   与 btnStart/btnCancel 8px 间距下隔, 属于 secondary action; Resize handler 重算 保 始终居中
             //   (multi toggle / 手动 resize / OS dpi zoom 都会 殃)。
-            _btnReset = new Button
+            //   🔧 v23 — GlassButton + muted gray theme (secondary action — 调子 软, 不与 主「开始」抢视觉)
+            _btnReset = new GlassButton
             {
                 Text = "恢复默认",
                 Left = 0,                                  // Resize handler 重算 (form width / 2 - btn.width / 2)
                 Top = y + 42,                              // btnStart.Bottom + 8
                 Width = 80, Height = 34,
-                FlatStyle = FlatStyle.Flat,
-                ForeColor = SystemColors.ControlText,
+                GlassTop = Color.FromArgb(235, 235, 245),
+                GlassBottom = Color.FromArgb(200, 205, 215),
+                BorderColor = Color.FromArgb(160, 170, 185),
+                ForeColor = Color.FromArgb(70, 70, 90),
             };
             _btnReset.Click += (s, e) =>
             {
@@ -622,10 +623,14 @@ namespace BaoJiaCAD
                 if (r == DialogResult.Yes) ResetToDefaults();
             };
 
-            _btnCancel = new Button
+            // 🔧 v23 — 「取消」 GlassButton — 浅灰 glass, 隔 「开始识别」主调
+            _btnCancel = new GlassButton
             {
                 Text = "取消", Left = 220, Top = y, Width = 100, Height = 34,
-                FlatStyle = FlatStyle.Flat
+                GlassTop = Color.FromArgb(250, 250, 250),
+                GlassBottom = Color.FromArgb(215, 220, 225),
+                BorderColor = Color.FromArgb(160, 165, 175),
+                ForeColor = Color.FromArgb(60, 60, 60),
             };
             _btnCancel.Click += (s, e) =>
             {
