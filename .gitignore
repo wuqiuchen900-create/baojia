@@ -1,0 +1,35 @@
+# ── 构建产物 ──
+bin/
+obj/
+
+# NuGet 包缓存
+packages/
+*.nupkg
+
+# ── 备份 / 临时文件 ──
+*_bak_*
+*backup*
+*_dump*
+
+# 运行时面板状态快照（有需要可保留，但建议不提交）
+user-overrides.json
+
+dist/
+
+# ── IDE / 编辑器 ──
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.DotSettings
+*.DotSettings.user
+
+# ── Python 脚本产物 ──
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Windows ──
+Thumbs.db
+Desktop.ini

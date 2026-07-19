@@ -1,0 +1,110 @@
+1: using System;
+2: using System.Collections.Generic;
+3: using System.ComponentModel;
+4: using System.Drawing;
+5: using System.IO;
+6: using System.Linq;
+7: using System.Text;
+8: using System.Windows.Forms;
+9: using Newtonsoft.Json;
+10: 
+11: namespace BaoJiaCAD.ConfigEditor
+12: {
+13:     /// <summary>
+14:     /// BaoJiaCAD config.json 独立编辑器. Designer-free WinForms (单文件).
+15:     /// - 启动: 自动定位 BaoJiaCAD/config.json (项目根) + BaoJiaCAD/bin/Debug/net48/config.json (运行时实读).
+16:     /// - 保存: 双写两份 + 时间戳备份 + round-trip 验证.
+17:     /// - 9 个 Tab 覆盖 config 的全部 ~15 个子 section.
+18:     /// </summary>
+19:     public class MainForm : Form
+20:     {
+21:         // ── config 双份路径 ──
+22:         private string _projectRoot;       // BaoJiaCAD.sln 所在目录
+23:         private string _srcPath;           // BaoJiaCAD/config.json (项目根, git-tracked)
+24:         private string _binPath;           // BaoJiaCAD/bin/Debug/net48/config.json (运行时实读)
+25: 
+26:         // ── 内存中的配置 ──
+27:         private QuoteConfig _cfg;
+28: 
+29:         // ── TabControl + 9 个 TabPage ──
+30:         private TabControl _tabs;
+31:         private TabPage _tabCompany;
+32:         private TabPage _tabDefaults;
+33:         private TabPage _tabRoomTypeMap;
+34:         private TabPage _tabKeywords;
+35:         private TabPage _tabFallbackMap;
+36:         private TabPage _tabTemplates;
+37:         private TabPage _tabFloorAlias;
+38:         private TabPage _tabTileSpec;
+39:         private TabPage _tabQuoteItems;
+40: 
+41:         // ── Tab 1 公司抬头 ──
+42:         private TextBox _txtCompanyName;
+43:         private TextBox _txtCompanyAddress;
+44: 
+45:         // ── Tab 2 默认墙高 + 厨卫参数 (10 个数值) ──
+46:         private NumericUpDown _numWallHeight;
+47:         private NumericUpDown _numTileHeight;
+48:         private NumericUpDown _numWaterproofHeight;
+49:         private NumericUpDown _numKitchenWaterproof;
+50:         private NumericUpDown _numBalconyWaterproof;
+51:         private NumericUpDown _numGardenRoll;
+52:         private NumericUpDown _numGardenNonRoll;
+53:         private NumericUpDown _numDoorDeduct;
+54:         private NumericUpDown _numWindowDeduct;
+55:         private NumericUpDown _numSumpPit;
+56:         private NumericUpDown _numFlowerPool;
+57: 
+58:         // ── Tab 3 房型识别关键词 ──
+59:         private DataGridView _dgvRoomTypeMap;
+60: 
+61:         // ── Tab 4 自动填数量关键词 (2 个 ListBox) ──
+62:         private TextBox _txtFloorKwInput;
+63:         private Button _btnFloorKwAdd;
+64:         private Button _btnFloorKwDel;
+65:         private ListBox _lstFloorKws;
+66:         private TextBox _txtWallKwInput;
+67:         private Button _btnWallKwAdd;
+68:         private Button _btnWallKwDel;
+69:         private ListBox _lstWallKws;
+70: 
+71:         // ── Tab 5 房型回退映射 ──
+72:         private DataGridView _dgvFallbackMap;
+73: 
+74:         // ── Tab 6 模板设置 ──
+75:         private TextBox _txtTplFolder;
+76:         private ComboBox _cmbActiveTpl;
+77:         private DataGridView _dgvTplFiles;
+78: 
+79:         // ── Tab 7 楼层别名 ──
+80:         private DataGridView _dgvFloorAlias;
+81: 
+82:         // ── Tab 8 瓷砖规格 ──
+83:         private ComboBox _cmbSpecRoomType;
+84:         private Button _btnSpecAdd;
+85:         private Button _btnSpecDel;
+86:         private DataGridView _dgvTileSpec;
+87: 
+88:         // ── Tab 9 报价项目 ──
+89:         private Button _btnQuoteItemAdd;
+90:         private Button _btnQuoteItemDel;
+91:         private DataGridView _dgvQuoteItems;
+92: 
+93:         // ── 底部按钮 ──
+94:         private Label _lblPath;
+95:         private Button _btnReload;
+96:         private Button _btnReset;
+97:         private Button _btnSave;
+98:         private Button _btnQuit;
+99: 
+100:         // ── 6 大类 (用于房型相关 dropdown) ──
+101:         private static readonly string[] SixCats = { "客餐厅", "厨房", "卫生间", "主卧", "主卫", "卧室", "阳台", "外花园" };
+102:         // ── CalcRule dropdown 选项 (允许自由输入) ──
+103:         private static readonly string[] CalcRules = { "Floor", "CeilingAndWall" };
+104: 
+105:         // 房间类型 panel 始终在重置后保持 RoomTypeMaps.Default 顺序?
+106:         // 不需要 — 我们就是直接读 + 写 config, 不排序 (保留用户在 config.json 里的顺序).
+107: 
+108:         public MainForm()
+109:         {
+110:             Text = "BaoJiaCAD 配置编辑";

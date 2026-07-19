@@ -1,0 +1,80 @@
+741:             }
+742:             _projectRoot = dir.FullName;
+743:             _srcPath = Path.Combine(_projectRoot, "BaoJiaCAD", "config.json");
+744:             _binPath = Path.Combine(_projectRoot, "BaoJiaCAD", "bin", "Debug", "net48", "config.json");
+745:             _lblPath.Text = $"项目根: {_projectRoot}    ·    src: {Path.GetFileName(_srcPath)}    ·    bin: {Path.GetFileName(_binPath)}";
+746:         }
+747: 
+748:         private void LoadConfig()
+749:         {
+750:             if (_projectRoot == null) return;
+751:             string loadPath = File.Exists(_srcPath) ? _srcPath
+752:                             : File.Exists(_binPath) ? _binPath
+753:                             : null;
+754:             if (loadPath == null)
+755:             {
+756:                 MessageBox.Show(
+757:                     $"未找到 config.json, 将用默认值初始化.\n期望路径:\n  {_srcPath}\n  {_binPath}",
+758:                     "初次启动", MessageBoxButtons.OK, MessageBoxIcon.Information);
+759:                 _cfg = QuoteConfig.CreateDefault();
+760:             }
+761:             else
+762:             {
+763:                 try
+764:                 {
+765:                     _cfg = QuoteConfig.Load(loadPath);
+766:                 }
+767:                 catch (Exception ex)
+768:                 {
+769:                     MessageBox.Show($"加载失败: {ex.Message}\n\n来源文件: {loadPath}", "加载失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+770:                     return;
+771:                 }
+772:             }
+773:             ApplyConfigToUI();
+774:         }
+775: 
+776:         private void BtnSave_Click(object sender, EventArgs e)
+777:         {
+778:             // 先把 UI 值拷回 _cfg
+779:             try { ApplyUIToConfig(); }
+780:             catch (Exception ex)
+781:             {
+782:                 MessageBox.Show($"读取面板值失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+783:                 return;
+784:             }
+785: 
+786:             try
+787:             {
+788:                 // 备份现有两份 (如果存在)
+789:                 BackupFile(_srcPath);
+790:                 BackupFile(_binPath);
+791: 
+792:                 // 写两份
+793:                 Directory.CreateDirectory(Path.GetDirectoryName(_srcPath));
+794:                 _cfg.Save(_srcPath);
+795:                 Directory.CreateDirectory(Path.GetDirectoryName(_binPath));
+796:                 _cfg.Save(_binPath);
+797: 
+798:                 // Round-trip 验证: 重读两份, 检查关键计数
+799:                 var reload1 = QuoteConfig.Load(_srcPath);
+800:                 var reload2 = QuoteConfig.Load(_binPath);
+801:                 int c1 = reload1.RoomTypeMaps?.Count ?? 0;
+802:                 int c2 = reload2.RoomTypeMaps?.Count ?? 0;
+803:                 if (c1 != c2)
+804:                     throw new InvalidDataException($"两份配置内容不一致: src={c1} 房型, bin={c2} 房型");
+805: 
+806:                 MessageBox.Show(
+807:                     $"✅ 已保存到 2 份文件:\n  • {_srcPath}\n  • {_binPath}\n\n" +
+808:                     $"原始文件已备份为 config_bak_yyyyMMdd_HHmmss.json (同目录).\n\n" +
+809:                     $"Round-trip 自检:\n  房型关键词: {reload1.RoomTypeMaps?.Count ?? 0} 条\n  默认墙高: {reload1.DefaultWallHeight} mm",
+810:                     "保存成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+811: 
+812:                 ApplyUIToConfig();  // 把刚保存的内容回灌 UI, 触发 transient consistency (eg 新增空 row 自动消失)
+813:             }
+814:             catch (Exception ex)
+815:             {
+816:                 MessageBox.Show($"保存失败: {ex.Message}", "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+817:             }
+818:         }
+819: 
+820:         private void BtnReload_Click(object sender, EventArgs e)

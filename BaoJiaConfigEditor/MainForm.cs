@@ -12,8 +12,11 @@ namespace BaoJiaCAD.ConfigEditor
 {
     /// <summary>
     /// BaoJiaCAD config.json 独立编辑器. Designer-free WinForms (单文件).
-    /// - 启动: 自动定位 BaoJiaCAD/config.json (项目根) + BaoJiaCAD/bin/Debug/net48/config.json (运行时实读).
-    /// - 保存: 双写两份 + 时间戳备份 + round-trip 验证.
+    /// - 启动: 自动定位 BaoJiaCAD/config.json (项目根, git-tracked) 与 BaoJiaCAD/bin/Debug/net48/config.json (运行时实读).
+    ///   EDIT 读写都只走 runtime config (bin/Debug/net48) — 项目根 src 不动, 由 git 管理.
+    ///   这样避免 src 与 bin/Debug 不一致时, 编辑器把过时的 src 当真值反写覆盖 runtime, 把 runtime 的 live
+    ///   数据 clobber 掉 (常见的「打开编辑/保存 → 实际配置消失」corruption 路径).
+    /// - 保存: 单写 runtime + 时间戳备份 + round-trip 验证.
     /// - 9 个 Tab 覆盖 config 的全部 ~15 个子 section.
     /// </summary>
     public class MainForm : Form
@@ -84,6 +87,9 @@ namespace BaoJiaCAD.ConfigEditor
         private Button _btnSpecAdd;
         private Button _btnSpecDel;
         private DataGridView _dgvTileSpec;
+        // 当前 DGV 网格正绑定的房间类型 — 用这个 commit, 不用 SelectedItem (后者在房型切换瞬间是「新房型」,
+        // 此刻 grid 还是旧房型的数据). 首次绑定前为 null (跳过 commit, 避免启动时把 6 项规格静默清掉).
+        private string _currentSpecRoomType;
 
         // ── Tab 9 报价项目 ──
         private Button _btnQuoteItemAdd;
@@ -748,8 +754,12 @@ namespace BaoJiaCAD.ConfigEditor
         private void LoadConfig()
         {
             if (_projectRoot == null) return;
-            string loadPath = File.Exists(_srcPath) ? _srcPath
-                            : File.Exists(_binPath) ? _binPath
+            // 优先读取 runtime config (bin/Debug/net48) — BJ/CAD 实际运行就是从这份读的, 才是
+            // 当前真值. _srcPath (项目根) 由 git 管理, 用户可能在 git 上做了修改但没重新 build 到 bin/Debug,
+            // 此时 src 反而是 stale 的; 又或者 src 跟 bin/Debug 已经发散, 拿 src 当真值就是污染起点.
+            // 当 bin 不存在时才退回 src (初次 build 检查或用户主动删了 bin 文件).
+            string loadPath = File.Exists(_binPath) ? _binPath
+                            : File.Exists(_srcPath) ? _srcPath
                             : null;
             if (loadPath == null)
             {
@@ -785,28 +795,23 @@ namespace BaoJiaCAD.ConfigEditor
 
             try
             {
-                // 备份现有两份 (如果存在)
-                BackupFile(_srcPath);
+                // 仅备份 runtime 那份 (bin/Debug/net48) — 用户编辑可能擦掉上次状态, 留底是基本盘.
                 BackupFile(_binPath);
 
-                // 写两份
-                Directory.CreateDirectory(Path.GetDirectoryName(_srcPath));
-                _cfg.Save(_srcPath);
+                // 只写运行时生效的那份 config — BJ/CAD 实际读这份, 用户编辑也只想影响这份.
+                // 项目根 src (git-tracked) 留给 git 工作流去管, 编辑器不直接改它, 避免
+                // src/runtime 出现 "看到的是一份, 跑的又是另一份" 的认知偏差.
                 Directory.CreateDirectory(Path.GetDirectoryName(_binPath));
                 _cfg.Save(_binPath);
 
-                // Round-trip 验证: 重读两份, 检查关键计数
-                var reload1 = QuoteConfig.Load(_srcPath);
-                var reload2 = QuoteConfig.Load(_binPath);
-                int c1 = reload1.RoomTypeMaps?.Count ?? 0;
-                int c2 = reload2.RoomTypeMaps?.Count ?? 0;
-                if (c1 != c2)
-                    throw new InvalidDataException($"两份配置内容不一致: src={c1} 房型, bin={c2} 房型");
+                // Round-trip 验证: 重读一次, 检查关键计数.
+                var reload = QuoteConfig.Load(_binPath);
 
                 MessageBox.Show(
-                    $"✅ 已保存到 2 份文件:\n  • {_srcPath}\n  • {_binPath}\n\n" +
+                    $"✅ 已保存到:\n  • {_binPath}\n\n" +
+                    $"项目根 src 那份未修改 (由 git 管理).\n" +
                     $"原始文件已备份为 config_bak_yyyyMMdd_HHmmss.json (同目录).\n\n" +
-                    $"Round-trip 自检:\n  房型关键词: {reload1.RoomTypeMaps?.Count ?? 0} 条\n  默认墙高: {reload1.DefaultWallHeight} mm",
+                    $"Round-trip 自检:\n  房型关键词: {reload.RoomTypeMaps?.Count ?? 0} 条\n  默认墙高: {reload.DefaultWallHeight} mm",
                     "保存成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
                 ApplyUIToConfig();  // 把刚保存的内容回灌 UI, 触发 transient consistency (eg 新增空 row 自动消失)
@@ -1043,14 +1048,23 @@ namespace BaoJiaCAD.ConfigEditor
             }
         }
 
-        // Tab 8 TileSpec 单独处理 — master-detail, 需要先 commit 当前选中的房间类型的 DGV
+        // Tab 8 TileSpec 单独处理 — master-detail, commit 必须用 DGV 当前绑定的房间类型名, 不用
+        // _cmbSpecRoomType.SelectedItem (后者是触发 refresh 的「新房型」, 此刻 grid 还没切, 会把
+        // 客餐厅的 grid 数据写到厨房名下). wrapper 只在 _currentSpecRoomType 已绑时 commit,
+        // 不 fallback 到 SelectedItem — 防御 ApplyUIToConfig 路径在 _currentSpecRoomType 为 null 的
+        // 边缘场景 (与 grid 不一致的 SelectedItem) 把空列表写到错误房型名下.
         private void CommitCurrentSpecToCfg()
+        {
+            if (string.IsNullOrEmpty(_currentSpecRoomType)) return;
+            CommitCurrentSpecToCfgForRoom(_currentSpecRoomType);
+        }
+
+        private void CommitCurrentSpecToCfgForRoom(string roomType)
         {
             if (_cfg.TemplateSettings == null) _cfg.TemplateSettings = new TemplateSettingsConfig();
             if (_cfg.TemplateSettings.TileSpecOptions == null)
                 _cfg.TemplateSettings.TileSpecOptions = new Dictionary<string, List<TileSpecOption>>();
-            string curRt = _cmbSpecRoomType.SelectedItem?.ToString();
-            if (string.IsNullOrEmpty(curRt)) return;
+            if (string.IsNullOrEmpty(roomType)) return;
             var list = new List<TileSpecOption>();
             foreach (DataGridViewRow r in _dgvTileSpec.Rows)
             {
@@ -1059,6 +1073,7 @@ namespace BaoJiaCAD.ConfigEditor
                 string value = Convert.ToString(r.Cells["Value"].Value) ?? "";
                 string matchStr = Convert.ToString(r.Cells["Match"].Value) ?? "";
                 if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(value)) continue;
+                if (value.StartsWith("spNew-")) continue;   // BtnSpecAdd 占位行 (value=spNew-XXXX) — 用户没改的占位不写盘, 避免脏数据.
                 var matches = matchStr.Split(new[] { ',', '|', '，', '、' }, StringSplitOptions.RemoveEmptyEntries)
                                        .Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
                 list.Add(new TileSpecOption
@@ -1071,7 +1086,7 @@ namespace BaoJiaCAD.ConfigEditor
                     LaborPrice = ParseNullableDouble(r.Cells["LaborPrice"].Value),
                 });
             }
-            _cfg.TemplateSettings.TileSpecOptions[curRt] = list;
+            _cfg.TemplateSettings.TileSpecOptions[roomType] = list;
         }
 
         // ApplyUIToConfig 时调一次 (把 master-detail 当前正在编辑的 房间 类型 commit 完, 再继续读其他 1D 表)
@@ -1106,6 +1121,8 @@ namespace BaoJiaCAD.ConfigEditor
 
         private void RebuildSpecRoomTypeList()
         {
+            _currentSpecRoomType = null;  // 重新绑定前 reset — 让首次 RefreshTileSpecGrid 跳过 commit,
+                                           // 避免用空 grid + 新 SelectedItem 把 _cfg 里的现有 6 项规格清成 [].
             _cmbSpecRoomType.Items.Clear();
             // 用 _cfg 里实际存在的 key 顺序 (用户首次编辑时可手动加 SixCats 之外的, 如 "客厅")
             var keys = _cfg?.TemplateSettings?.TileSpecOptions?.Keys?.ToList() ?? new List<string>();
@@ -1120,13 +1137,23 @@ namespace BaoJiaCAD.ConfigEditor
 
         private void RefreshTileSpecGrid()
         {
-            // commit 当前 room type (避免 DGV 值在切换时丢失)
-            CommitCurrentSpecToCfg();
-            string curRt = _cmbSpecRoomType.SelectedItem?.ToString();
+            // commit 用 _currentSpecRoomType (旧房型, grid 还停在旧房型上) 而不是 SelectedItem (新房型).
+            // _currentSpecRoomType == null 表示从未绑定过 (首次打开) — 跳过 commit, 不然启动瞬间
+            // 会用空 grid + 第一个 SelectedItem 把 LoadConfig 加载好的 6 项规格清成 [].
+            CommitCurrentSpecToCfgForRoom(_currentSpecRoomType);
+            string newRt = _cmbSpecRoomType.SelectedItem?.ToString();
             _dgvTileSpec.Rows.Clear();
-            if (string.IsNullOrEmpty(curRt)) return;
-            var list = _cfg?.TemplateSettings?.TileSpecOptions?.TryGetValue(curRt, out var l) == true ? l : null;
-            if (list == null) return;
+            if (string.IsNullOrEmpty(newRt))
+            {
+                _currentSpecRoomType = null;
+                return;
+            }
+            // 也确保 _cfg 里至少有这个 key (首次打开 / 用户切到 SixCats 默认项时, _cfg 可能还没 seed).
+            if (_cfg.TemplateSettings.TileSpecOptions == null)
+                _cfg.TemplateSettings.TileSpecOptions = new Dictionary<string, List<TileSpecOption>>();
+            if (!_cfg.TemplateSettings.TileSpecOptions.ContainsKey(newRt))
+                _cfg.TemplateSettings.TileSpecOptions[newRt] = new List<TileSpecOption>();
+            var list = _cfg.TemplateSettings.TileSpecOptions[newRt];
             foreach (var spec in list)
             {
                 _dgvTileSpec.Rows.Add(
@@ -1137,6 +1164,7 @@ namespace BaoJiaCAD.ConfigEditor
                     spec.MaterialPrice.HasValue ? (object)spec.MaterialPrice.Value : DBNull.Value,
                     spec.LaborPrice.HasValue ? (object)spec.LaborPrice.Value : DBNull.Value);
             }
+            _currentSpecRoomType = newRt;
         }
 
         private void BtnSpecAdd_Click(object sender, EventArgs e)

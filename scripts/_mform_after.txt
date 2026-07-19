@@ -1,0 +1,60 @@
+1041:                     Unit = Convert.ToString(r.Cells["Unit"].Value) ?? "",
+1042:                     MaterialPrice = ParseDouble(r.Cells["MaterialPrice"].Value),
+1043:                     LaborPrice = ParseDouble(r.Cells["LaborPrice"].Value),
+1044:                     CalcRule = Convert.ToString(r.Cells["CalcRule"].Value) ?? "Floor",
+1045:                     IsSummaryItem = Convert.ToBoolean(r.Cells["IsSummaryItem"].Value),
+1046:                     Description = Convert.ToString(r.Cells["Description"].Value) ?? "",
+1047:                 });
+1048:             }
+1049:         }
+1050: 
+1051:         // Tab 8 TileSpec 单独处理 — master-detail, commit 必须用 DGV 当前绑定的房间类型名, 不用
+1052:         // _cmbSpecRoomType.SelectedItem (后者是触发 refresh 的「新房型」, 此刻 grid 还没切, 会把
+1053:         // 客餐厅的 grid 数据写到厨房名下). CommitCurrentSpecToCfg 走 _currentSpecRoomType = SelectedItem
+1054:         // (用户在没有切换、保存时, 两者一致). 切换房型时序改由 RefreshTileSpecGrid 用显式房型 commit.
+1055:         private void CommitCurrentSpecToCfg()
+1056:         {
+1057:             CommitCurrentSpecToCfgForRoom(_currentSpecRoomType ?? _cmbSpecRoomType.SelectedItem?.ToString());
+1058:         }
+1059: 
+1060:         private void CommitCurrentSpecToCfgForRoom(string roomType)
+1061:         {
+1062:             if (_cfg.TemplateSettings == null) _cfg.TemplateSettings = new TemplateSettingsConfig();
+1063:             if (_cfg.TemplateSettings.TileSpecOptions == null)
+1064:                 _cfg.TemplateSettings.TileSpecOptions = new Dictionary<string, List<TileSpecOption>>();
+1065:             if (string.IsNullOrEmpty(roomType)) return;
+1066:             var list = new List<TileSpecOption>();
+1067:             foreach (DataGridViewRow r in _dgvTileSpec.Rows)
+1068:             {
+1069:                 if (r.IsNewRow) continue;
+1070:                 string label = Convert.ToString(r.Cells["Label"].Value) ?? "";
+1071:                 string value = Convert.ToString(r.Cells["Value"].Value) ?? "";
+1072:                 string matchStr = Convert.ToString(r.Cells["Match"].Value) ?? "";
+1073:                 if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(value)) continue;
+1074:                 var matches = matchStr.Split(new[] { ',', '|', '，', '、' }, StringSplitOptions.RemoveEmptyEntries)
+1075:                                        .Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+1076:                 list.Add(new TileSpecOption
+1077:                 {
+1078:                     Label = label,
+1079:                     Value = value,
+1080:                     Match = matches,
+1081:                     IsDefault = Convert.ToBoolean(r.Cells["IsDefault"].Value),
+1082:                     MaterialPrice = ParseNullableDouble(r.Cells["MaterialPrice"].Value),
+1083:                     LaborPrice = ParseNullableDouble(r.Cells["LaborPrice"].Value),
+1084:                 });
+1085:             }
+1086:             _cfg.TemplateSettings.TileSpecOptions[curRt] = list;
+1087:         }
+1088: 
+1089:         // ApplyUIToConfig 时调一次 (把 master-detail 当前正在编辑的 房间 类型 commit 完, 再继续读其他 1D 表)
+1090:         private void ApplyUIToCfg_RoomSpecTemplatesPart()
+1091:         {
+1092:             // 1. 当前列表的 TileSpec
+1093:             CommitCurrentSpecToCfg();
+1094:             // 2. 同时把列表里其他 room types 还没 commit 的也 commit (实际 _cfg 上都有 entry, 但 DGV 只显示当前选中的)
+1095:             //    → 已隐式处理, 因为 _cfg 已经 initialized (LoadConfig + ApplyConfigToUI 调用过)
+1096:         }
+1097: 
+1098:         private static double ParseDouble(object val)
+1099:         {
+1100:             if (val == null || val == DBNull.Value) return 0.0;

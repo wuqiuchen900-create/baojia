@@ -1,0 +1,140 @@
+1041:                     Description = Convert.ToString(r.Cells["Description"].Value) ?? "",
+1042:                 });
+1043:             }
+1044:         }
+1045: 
+1046:         // Tab 8 TileSpec 单独处理 — master-detail, 需要先 commit 当前选中的房间类型的 DGV
+1047:         private void CommitCurrentSpecToCfg()
+1048:         {
+1049:             if (_cfg.TemplateSettings == null) _cfg.TemplateSettings = new TemplateSettingsConfig();
+1050:             if (_cfg.TemplateSettings.TileSpecOptions == null)
+1051:                 _cfg.TemplateSettings.TileSpecOptions = new Dictionary<string, List<TileSpecOption>>();
+1052:             string curRt = _cmbSpecRoomType.SelectedItem?.ToString();
+1053:             if (string.IsNullOrEmpty(curRt)) return;
+1054:             var list = new List<TileSpecOption>();
+1055:             foreach (DataGridViewRow r in _dgvTileSpec.Rows)
+1056:             {
+1057:                 if (r.IsNewRow) continue;
+1058:                 string label = Convert.ToString(r.Cells["Label"].Value) ?? "";
+1059:                 string value = Convert.ToString(r.Cells["Value"].Value) ?? "";
+1060:                 string matchStr = Convert.ToString(r.Cells["Match"].Value) ?? "";
+1061:                 if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(value)) continue;
+1062:                 var matches = matchStr.Split(new[] { ',', '|', '，', '、' }, StringSplitOptions.RemoveEmptyEntries)
+1063:                                        .Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+1064:                 list.Add(new TileSpecOption
+1065:                 {
+1066:                     Label = label,
+1067:                     Value = value,
+1068:                     Match = matches,
+1069:                     IsDefault = Convert.ToBoolean(r.Cells["IsDefault"].Value),
+1070:                     MaterialPrice = ParseNullableDouble(r.Cells["MaterialPrice"].Value),
+1071:                     LaborPrice = ParseNullableDouble(r.Cells["LaborPrice"].Value),
+1072:                 });
+1073:             }
+1074:             _cfg.TemplateSettings.TileSpecOptions[curRt] = list;
+1075:         }
+1076: 
+1077:         // ApplyUIToConfig 时调一次 (把 master-detail 当前正在编辑的 房间 类型 commit 完, 再继续读其他 1D 表)
+1078:         private void ApplyUIToCfg_RoomSpecTemplatesPart()
+1079:         {
+1080:             // 1. 当前列表的 TileSpec
+1081:             CommitCurrentSpecToCfg();
+1082:             // 2. 同时把列表里其他 room types 还没 commit 的也 commit (实际 _cfg 上都有 entry, 但 DGV 只显示当前选中的)
+1083:             //    → 已隐式处理, 因为 _cfg 已经 initialized (LoadConfig + ApplyConfigToUI 调用过)
+1084:         }
+1085: 
+1086:         private static double ParseDouble(object val)
+1087:         {
+1088:             if (val == null || val == DBNull.Value) return 0.0;
+1089:             double d;
+1090:             double.TryParse(Convert.ToString(val), out d);
+1091:             return d;
+1092:         }
+1093: 
+1094:         private static double? ParseNullableDouble(object val)
+1095:         {
+1096:             if (val == null || val == DBNull.Value) return null;
+1097:             string s = Convert.ToString(val)?.Trim();
+1098:             if (string.IsNullOrEmpty(s)) return null;
+1099:             if (double.TryParse(s, out var d)) return d;
+1100:             return null;
+1101:         }
+1102: 
+1103:         // ══════════════════════════════════════════════
+1104:         //  Tab 8 TileSpec master-detail 逻辑
+1105:         // ══════════════════════════════════════════════
+1106: 
+1107:         private void RebuildSpecRoomTypeList()
+1108:         {
+1109:             _cmbSpecRoomType.Items.Clear();
+1110:             // 用 _cfg 里实际存在的 key 顺序 (用户首次编辑时可手动加 SixCats 之外的, 如 "客厅")
+1111:             var keys = _cfg?.TemplateSettings?.TileSpecOptions?.Keys?.ToList() ?? new List<string>();
+1112:             // 加 SixCats 作为推荐未配置项
+1113:             foreach (var c in SixCats)
+1114:                 if (!keys.Contains(c)) keys.Add(c);
+1115:             foreach (var k in keys) _cmbSpecRoomType.Items.Add(k);
+1116:             // 默认选中第一个
+1117:             _cmbSpecRoomType.SelectedIndex = (_cmbSpecRoomType.Items.Count > 0) ? 0 : -1;
+1118:             RefreshTileSpecGrid();
+1119:         }
+1120: 
+1121:         private void RefreshTileSpecGrid()
+1122:         {
+1123:             // commit 当前 room type (避免 DGV 值在切换时丢失)
+1124:             CommitCurrentSpecToCfg();
+1125:             string curRt = _cmbSpecRoomType.SelectedItem?.ToString();
+1126:             _dgvTileSpec.Rows.Clear();
+1127:             if (string.IsNullOrEmpty(curRt)) return;
+1128:             var list = _cfg?.TemplateSettings?.TileSpecOptions?.TryGetValue(curRt, out var l) == true ? l : null;
+1129:             if (list == null) return;
+1130:             foreach (var spec in list)
+1131:             {
+1132:                 _dgvTileSpec.Rows.Add(
+1133:                     spec.Label,
+1134:                     spec.Value,
+1135:                     string.Join(", ", spec.Match ?? new List<string>()),
+1136:                     spec.IsDefault,
+1137:                     spec.MaterialPrice.HasValue ? (object)spec.MaterialPrice.Value : DBNull.Value,
+1138:                     spec.LaborPrice.HasValue ? (object)spec.LaborPrice.Value : DBNull.Value);
+1139:             }
+1140:         }
+1141: 
+1142:         private void BtnSpecAdd_Click(object sender, EventArgs e)
+1143:         {
+1144:             _dgvTileSpec.Rows.Add("新规格 (改 Label)", "spNew-" + Guid.NewGuid().ToString("N").Substring(0, 4), "正铺", false, DBNull.Value, DBNull.Value);
+1145:         }
+1146: 
+1147:         private void BtnSpecDel_Click(object sender, EventArgs e)
+1148:         {
+1149:             foreach (DataGridViewRow r in _dgvTileSpec.SelectedRows)
+1150:                 if (!r.IsNewRow) _dgvTileSpec.Rows.Remove(r);
+1151:         }
+1152: 
+1153:         /// <summary>
+1154:         /// EXE 入口点. WinExe 项目必须显式包含 static Main().
+1155:         /// </summary>
+1156:         [STAThread]
+1157:         private static void Main()
+1158:         {
+1159:             Application.EnableVisualStyles();
+1160:             Application.SetCompatibleTextRenderingDefault(false);
+1161:             try
+1162:             {
+1163:                 Application.Run(new MainForm());
+1164:             }
+1165:             catch (Exception ex)
+1166:             {
+1167:                 MessageBox.Show($"BaoJiaCAD 配置编辑启动失败:\n{ex.Message}\n\n{ex.StackTrace}",
+1168:                     "致命错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+1169:             }
+1170:         }
+1171:     }
+1172: 
+1173:     // 辅助扩展: 简洁地把多个控件塞进 FlowLayoutPanel
+1174:     internal static class FlowPanelExt
+1175:     {
+1176:         public static FlowLayoutPanel _Add(this FlowLayoutPanel p, params Control[] controls)
+1177:         {
+1178:             p.Controls.AddRange(controls);
+1179:             return p;
+1180:         }

@@ -15,7 +15,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 namespace BaoJiaCAD
 {
     /// <summary>
-    /// AutoCAD 命令入口
+    /// AutoCAD 命令入口 — BJ (一键报价) 命令.
+    /// 🔧 CQ (拆墙对比) 已拆到 BaoJiaCAD/CQ/CQCommands.cs, 同 dll 不同 namespace, 互不干扰.
     /// </summary>
     public class Commands
     {
@@ -344,6 +345,9 @@ namespace BaoJiaCAD
                 }
             }
         }
+
+        // 🔧 CQ 拆墙已搬到 BaoJiaCAD/CQ/CQCommands.cs (独立 CommandClass 注册).
+        //   同 dll 不同 namespace + 不同文件目录. Commands.cs 现在只关心 BJ (报价).
 
         /// <summary>
         /// 把当前层成功的识别结果提交到全局列表 + 跨层去重缓存
